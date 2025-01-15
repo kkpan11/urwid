@@ -6,6 +6,9 @@ import warnings
 from .attr_map import AttrMap
 
 if typing.TYPE_CHECKING:
+    from collections.abc import Hashable
+
+    from .constants import Sizing
     from .widget import Widget
 
 
@@ -33,14 +36,18 @@ class AttrWrap(AttrMap):
         >>> next(aw.render(size, focus=True).content())
         [('fgreet', None, ...'hi   ')]
         """
+        warnings.warn(
+            "AttrWrap is maintained for backwards compatibility only, new code should use AttrMap instead.",
+            PendingDeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(w, attr, focus_attr)
 
-    def _repr_attrs(self):
+    def _repr_attrs(self) -> dict[str, typing.Any]:
         # only include the focus_attr when it takes effect (not None)
-        d = dict(super()._repr_attrs(), attr=self.attr)
+        d = {**super()._repr_attrs(), "attr": self.attr}
         del d["attr_map"]
-        if "focus_map" in d:
-            del d["focus_map"]
+        d.pop("focus_map", None)
         if self.focus_attr is not None:
             d["focus_attr"] = self.focus_attr
         return d
@@ -80,10 +87,10 @@ class AttrWrap(AttrMap):
         )
         self.original_widget = new_widget
 
-    def get_attr(self):
+    def get_attr(self) -> Hashable:
         return self.attr_map[None]
 
-    def set_attr(self, attr):
+    def set_attr(self, attr: Hashable) -> None:
         """
         Set the attribute to apply to the wrapped widget
 
@@ -96,13 +103,12 @@ class AttrWrap(AttrMap):
 
     attr = property(get_attr, set_attr)
 
-    def get_focus_attr(self):
-        focus_map = self.focus_map
-        if focus_map:
+    def get_focus_attr(self) -> Hashable | None:
+        if focus_map := self.focus_map:
             return focus_map[None]
         return None
 
-    def set_focus_attr(self, focus_attr):
+    def set_focus_attr(self, focus_attr: Hashable) -> None:
         """
         Set the attribute to apply to the wapped widget when it is in
         focus
@@ -130,5 +136,5 @@ class AttrWrap(AttrMap):
         """
         return getattr(self._original_widget, name)
 
-    def sizing(self):
+    def sizing(self) -> frozenset[Sizing]:
         return self._original_widget.sizing()

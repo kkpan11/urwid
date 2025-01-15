@@ -21,63 +21,62 @@
 
 from __future__ import annotations
 
+import typing
+from contextlib import suppress
+
 import urwid
 
 
-def main():
-    urwid.set_encoding('utf8')
-    term = urwid.Terminal(None, encoding='utf-8')
+def main() -> None:
+    urwid.set_encoding("utf8")
+    term = urwid.Terminal(None, encoding="utf-8")
 
-    size_widget = urwid.Text('')
+    size_widget = urwid.Text("")
 
     mainframe = urwid.LineBox(
-        urwid.Pile([
-            ('weight', 70, term),
-            ('fixed', 1, urwid.Filler(size_widget)),
-            ('fixed', 1, urwid.Filler(urwid.Edit('focus test edit: '))),
-        ]),
+        urwid.Pile(
+            [
+                (urwid.WEIGHT, 70, term),
+                (1, urwid.Filler(size_widget)),
+                (1, urwid.Filler(urwid.Edit("focus test edit: "))),
+            ]
+        ),
     )
 
-    def set_title(widget, title):
+    def set_title(widget, title: str) -> None:
         mainframe.set_title(title)
 
-    def quit(*args, **kwargs):
+    def execute_quit(*args, **kwargs) -> typing.NoReturn:
         raise urwid.ExitMainLoop()
 
-    def handle_key(key):
-        if key in ('q', 'Q'):
-            quit()
+    def handle_key(key: str | tuple[str, int, int, int]) -> None:
+        if key in {"q", "Q"}:
+            execute_quit()
 
-    def handle_resize(widget, size):
+    def handle_resize(widget, size: tuple[int, int]) -> None:
         size_widget.set_text(f"Terminal size: [{size[0]}, {size[1]}]")
 
-    urwid.connect_signal(term, 'title', set_title)
-    urwid.connect_signal(term, 'closed', quit)
+    urwid.connect_signal(term, "title", set_title)
+    urwid.connect_signal(term, "closed", execute_quit)
 
-    try:
-        urwid.connect_signal(term, 'resize', handle_resize)
-    except NameError:
+    with suppress(NameError):
+        urwid.connect_signal(term, "resize", handle_resize)
         # if using a version of Urwid library where vterm doesn't support
         # resize, don't register the signal handler.
-        pass
 
     try:
         # create Screen with bracketed paste mode support enabled
-        bpm_screen = urwid.raw_display.Screen(bracketed_paste_mode=True)
+        bpm_screen = urwid.display.raw.Screen(bracketed_paste_mode=True)  # pylint: disable=unexpected-keyword-arg
     except TypeError:
         # if using a version of Urwid library that doesn't support
         # bracketed paste mode, do without it.
-        bpm_screen = urwid.raw_display.Screen()
+        bpm_screen = urwid.display.raw.Screen()
 
-    loop = urwid.MainLoop(
-        mainframe,
-        handle_mouse=False,
-        screen=bpm_screen,
-        unhandled_input=handle_key)
+    loop = urwid.MainLoop(mainframe, handle_mouse=False, screen=bpm_screen, unhandled_input=handle_key)
 
     term.main_loop = loop
     loop.run()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

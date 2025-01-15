@@ -1,18 +1,20 @@
 Urwid
 =====
-|pypi| |docs| |ci| |coveralls|
+|pypi| |docs| |gitter| |ci| |pre-commit| |coveralls|
 
 About
 =====
 
-Urwid is a console user interface library for Python on Linux, OSX, Cygwin or other unix-like OS.
+Urwid is a console user interface library for Python on Linux, OSX, Cygwin or other unix-like OS
+and partially supports Windows OS (see below).
+
 It includes many features useful for text console application developers including:
 
 - Applications resize quickly and smoothly
 - Automatic, programmable text alignment and wrapping
 - Simple markup for setting text attributes within blocks of text
 - Powerful list box with programmable content for scrolling all widget types
-- Your choice of event loops: Twisted, Glib, Tornado, asyncio or select-based loop
+- Your choice of event loops: Twisted, Glib, Tornado, asyncio, trio, ZeroMQ or select-based loop
 - Pre-built widgets include edit boxes, buttons, check boxes and radio buttons
 - Display modules include raw, curses, and experimental LCD and web displays
 - Support for UTF-8, simple 8-bit and CJK encodings
@@ -28,14 +30,42 @@ Installation
 To install using pip
 
 .. code:: bash
-   
+
    pip install urwid
+
+For advanced functionality extra requirements need to be installed.
+Example for ZeroMQ event loop and LCD display:
+
+.. code:: bash
+
+    pip install urwid[serial,zmq]
 
 Alternatively if you are on Debian or Ubuntu
 
 .. code:: bash
 
-   apt-get install python-urwid
+   apt-get install python3-urwid
+
+Windows support notes
+=====================
+
+* Not supported:
+
+1. Terminal widget and all related render API (TermCanvas, TermCharset, TermModes, TermScroller)
+2. Any file descriptors except sockets (Windows OS limitation)
+3. ZMQEventLoop.
+
+* Special requirements:
+
+1. Extra libraries required for curses display support:
+
+.. code-block:: bash
+
+    pip install urwid[curses]
+
+* CursesDisplay incorrectly handles mouse input in case of fast actions.
+* Only UTF-8 mode is supported.
+
 
 Testing
 =======
@@ -55,12 +85,11 @@ To test code in all Python versions:
 Supported Python versions
 =========================
 
-- 3.7
-- 3.8
 - 3.9
 - 3.10
 - 3.11
 - 3.12
+- 3.13
 - pypy3
 
 Authors
@@ -76,7 +105,8 @@ Maintainers
 
 `and3rson <//github.com/and3rson>`_,
 `tonycpsu <//github.com/tonycpsu>`_,
-`ulidtko <//github.com/ulidtko>`_
+`ulidtko <//github.com/ulidtko>`_,
+`penguinolog <//github.com/penguinolog>`_
 
 Contributors
 ------------
@@ -223,14 +253,21 @@ Contributors
     :alt: current version on PyPi
     :target: https://pypi.python.org/pypi/urwid
 
-.. |docs| image:: https://readthedocs.org/projects/urwid/badge/?version=latest
+.. |docs| image:: https://github.com/urwid/urwid/actions/workflows/documentation.yml/badge.svg?branch=master
     :alt: Documentation Status
-    :target: https://urwid.readthedocs.io/en/latest/?badge=latest
+    :target: https://urwid.org
+
+.. |gitter| image:: https://img.shields.io/gitter/room/urwid/community
+   :alt: Gitter
+   :target: https://gitter.im/urwid/community
 
 .. |ci| image:: https://github.com/urwid/urwid/actions/workflows/pythonpackage.yml/badge.svg?branch=master
     :target: https://github.com/urwid/urwid/actions
     :alt: CI status
 
+.. |pre-commit| image:: https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit
+   :target: https://github.com/pre-commit/pre-commit
+   :alt: pre-commit
 
 .. |coveralls| image:: https://coveralls.io/repos/github/urwid/urwid/badge.svg
     :alt: test coverage

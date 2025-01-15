@@ -1,5 +1,3 @@
-#!/usr/bin/python
-#
 # Urwid graphics widgets
 #    Copyright (C) 2004-2011  Ian Ward
 #
@@ -22,7 +20,7 @@
 
 from __future__ import annotations
 
-from urwid.display_common import AttrSpec
+from urwid.display import AttrSpec
 from urwid.widget import (
     BarGraph,
     BarGraphError,
@@ -39,14 +37,14 @@ from urwid.widget import (
 )
 
 __all__ = (
-    "BigText",
-    "LineBox",
     "BarGraph",
     "BarGraphError",
     "BarGraphMeta",
+    "BigText",
     "GraphVScale",
-    "scale_bar_values",
+    "LineBox",
     "ProgressBar",
+    "scale_bar_values",
 )
 
 
@@ -58,6 +56,7 @@ class PythonLogo(Widget):
         Create canvas containing an ASCII version of the Python
         Logo and store it.
         """
+        super().__init__()
         blu = AttrSpec("light blue", "default")
         yel = AttrSpec("yellow", "default")
         width = 17

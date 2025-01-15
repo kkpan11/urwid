@@ -5,18 +5,21 @@ import typing
 from urwid import text_layout
 from urwid.canvas import apply_text_layout
 from urwid.split_repr import remove_defaults
-from urwid.util import calc_width, decompose_tagmarkup
+from urwid.str_util import calc_width
+from urwid.util import decompose_tagmarkup, get_encoding
 
 from .constants import Align, Sizing, WrapMode
-from .widget import Widget
+from .widget import Widget, WidgetError
 
 if typing.TYPE_CHECKING:
+    from collections.abc import Hashable
+
     from typing_extensions import Literal
 
     from urwid.canvas import TextCanvas
 
 
-class TextError(Exception):
+class TextError(WidgetError):
     pass
 
 
@@ -25,14 +28,14 @@ class Text(Widget):
     a horizontally resizeable text widget
     """
 
-    _sizing = frozenset([Sizing.FLOW])
+    _sizing = frozenset([Sizing.FLOW, Sizing.FIXED])
 
     ignore_focus = True
     _repr_content_length_max = 140
 
     def __init__(
         self,
-        markup,
+        markup: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         align: Literal["left", "center", "right"] | Align = Align.LEFT,
         wrap: Literal["space", "any", "clip", "ellipsis"] | WrapMode = WrapMode.SPACE,
         layout: text_layout.TextLayout | None = None,
@@ -59,17 +62,17 @@ class Text(Widget):
         :type layout: text layout instance
 
         >>> Text(u"Hello")
-        <Text flow widget 'Hello'>
+        <Text fixed/flow widget 'Hello'>
         >>> t = Text(('bold', u"stuff"), 'right', 'any')
         >>> t
-        <Text flow widget 'stuff' align='right' wrap='any'>
+        <Text fixed/flow widget 'stuff' align='right' wrap='any'>
         >>> print(t.text)
         stuff
         >>> t.attrib
         [('bold', 5)]
         """
         super().__init__()
-        self._cache_maxcol = None
+        self._cache_maxcol: int | None = None
         self.set_text(markup)
         self.set_layout(align, wrap, layout)
 
@@ -86,19 +89,19 @@ class Text(Widget):
             )
         return [*first, rest]
 
-    def _repr_attrs(self):
-        attrs = dict(
-            super()._repr_attrs(),
-            align=self._align_mode,
-            wrap=self._wrap_mode,
-        )
+    def _repr_attrs(self) -> dict[str, typing.Any]:
+        attrs = {
+            **super()._repr_attrs(),
+            "align": self._align_mode,
+            "wrap": self._wrap_mode,
+        }
         return remove_defaults(attrs, Text.__init__)
 
     def _invalidate(self) -> None:
         self._cache_maxcol = None
         super()._invalidate()
 
-    def set_text(self, markup):
+    def set_text(self, markup: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]]) -> None:
         """
         Set content of text widget.
 
@@ -118,7 +121,7 @@ class Text(Widget):
         self._text, self._attrib = decompose_tagmarkup(markup)
         self._invalidate()
 
-    def get_text(self):
+    def get_text(self) -> tuple[str | bytes, list[tuple[Hashable, int]]]:
         """
         :returns: (*text*, *display attributes*)
 
@@ -139,7 +142,7 @@ class Text(Widget):
         return self._text, self._attrib
 
     @property
-    def text(self) -> str:
+    def text(self) -> str | bytes:
         """
         Read-only property returning the complete bytes/unicode content
         of this widget
@@ -147,7 +150,7 @@ class Text(Widget):
         return self.get_text()[0]
 
     @property
-    def attrib(self):
+    def attrib(self) -> list[tuple[Hashable, int]]:
         """
         Read-only property returning the run-length encoded display
         attributes of this widget
@@ -212,7 +215,7 @@ class Text(Widget):
         self,
         align: Literal["left", "center", "right"] | Align,
         wrap: Literal["space", "any", "clip", "ellipsis"] | WrapMode,
-        layout=None,
+        layout: text_layout.TextLayout | None = None,
     ) -> None:
         """
         Set the text layout object, alignment and wrapping modes at
@@ -227,7 +230,7 @@ class Text(Widget):
         >>> t = Text(u"hi")
         >>> t.set_layout('right', 'clip')
         >>> t
-        <Text flow widget 'hi' align='right' wrap='clip'>
+        <Text fixed/flow widget 'hi' align='right' wrap='clip'>
         """
         if layout is None:
             layout = text_layout.default_layout
@@ -242,20 +245,29 @@ class Text(Widget):
     def layout(self):
         return self._layout
 
-    def render(self, size: tuple[int], focus: bool = False) -> TextCanvas:
+    def render(
+        self,
+        size: tuple[int] | tuple[()],  # type: ignore[override]
+        focus: bool = False,
+    ) -> TextCanvas:
         """
         Render contents with wrapping and alignment.  Return canvas.
 
         See :meth:`Widget.render` for parameter details.
 
-        >>> Text(u"important things").render((18,)).text # ... = b in Python 3
-        [...'important things  ']
+        >>> Text(u"important things").render((18,)).text
+        [b'important things  ']
         >>> Text(u"important things").render((11,)).text
-        [...'important  ', ...'things     ']
+        [b'important  ', b'things     ']
+        >>> Text("demo text").render(()).text
+        [b'demo text']
         """
-        (maxcol,) = size
         text, attr = self.get_text()
-        # assert isinstance(text, unicode)
+        if size:
+            (maxcol,) = size
+        else:
+            maxcol, _ = self.pack(focus=focus)
+
         trans = self.get_line_translation(maxcol, (text, attr))
         return apply_text_layout(text, attr, trans, maxcol)
 
@@ -273,11 +285,14 @@ class Text(Widget):
         (maxcol,) = size
         return len(self.get_line_translation(maxcol))
 
-    def get_line_translation(self, maxcol: int, ta=None):
+    def get_line_translation(
+        self,
+        maxcol: int,
+        ta: tuple[str | bytes, list[tuple[Hashable, int]]] | None = None,
+    ) -> list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]]:
         """
         Return layout structure used to map self.text to a canvas.
-        This method is used internally, but may be useful for
-        debugging custom layout classes.
+        This method is used internally, but may be useful for debugging custom layout classes.
 
         :param maxcol: columns available for display
         :type maxcol: int
@@ -289,23 +304,33 @@ class Text(Widget):
             self._update_cache_translation(maxcol, ta)
         return self._cache_translation
 
-    def _update_cache_translation(self, maxcol: int, ta):
+    def _update_cache_translation(
+        self,
+        maxcol: int,
+        ta: tuple[str | bytes, list[tuple[Hashable, int]]] | None,
+    ) -> None:
         if ta:
-            text, attr = ta
+            text, _attr = ta
         else:
-            text, attr = self.get_text()
+            text, _attr = self.get_text()
         self._cache_maxcol = maxcol
         self._cache_translation = self.layout.layout(text, maxcol, self._align_mode, self._wrap_mode)
 
-    def pack(self, size: tuple[int] | None = None, focus: bool = False) -> tuple[int, int]:
+    def pack(
+        self,
+        size: tuple[()] | tuple[int] | None = None,  # type: ignore[override]
+        focus: bool = False,
+    ) -> tuple[int, int]:
         """
         Return the number of screen columns and rows required for
         this Text widget to be displayed without wrapping or
         clipping, as a single element tuple.
 
-        :param size: ``None`` for unlimited screen columns or (*maxcol*,) to
-                     specify a maximum column size
+        :param size: ``None`` or ``()`` for unlimited screen columns (like FIXED sizing)
+                     or (*maxcol*,) to specify a maximum column size
         :type size: widget size
+        :param focus: widget is focused on
+        :type focus: bool
 
         >>> Text(u"important things").pack()
         (16, 1)
@@ -313,25 +338,26 @@ class Text(Widget):
         (9, 2)
         >>> Text(u"important things").pack((8,))
         (8, 2)
+        >>> Text(u"important things").pack(())
+        (16, 1)
         """
         text, attr = self.get_text()
 
-        if size is not None:
+        if size:
             (maxcol,) = size
             if not hasattr(self.layout, "pack"):
-                return size
+                return maxcol, self.rows(size, focus)
+
             trans = self.get_line_translation(maxcol, (text, attr))
             cols = self.layout.pack(maxcol, trans)
             return (cols, len(trans))
 
-        i = 0
-        cols = 0
-        while i < len(text):
-            j = text.find("\n", i)
-            if j == -1:
-                j = len(text)
-            c = calc_width(text, i, j)
-            if c > cols:
-                cols = c
-            i = j + 1
-        return (cols, text.count("\n") + 1)
+        if text:
+            if isinstance(text, bytes):
+                text = text.decode(get_encoding())
+
+            return (
+                max(calc_width(line, 0, len(line)) for line in text.splitlines(keepends=False)),
+                text.count("\n") + 1,
+            )
+        return 0, 1

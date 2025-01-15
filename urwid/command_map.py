@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import enum
 import typing
-from typing import Iterator
+from collections.abc import MutableMapping
 
 if typing.TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from typing_extensions import Self
 
 
@@ -39,6 +41,8 @@ class Command(str, enum.Enum):
     MAX_RIGHT = "cursor max right"
     ACTIVATE = "activate"
     MENU = "menu"
+    SELECT_NEXT = "next selectable"
+    SELECT_PREVIOUS = "prev selectable"
 
 
 REDRAW_SCREEN = Command.REDRAW_SCREEN
@@ -53,7 +57,7 @@ CURSOR_MAX_RIGHT = Command.MAX_RIGHT
 ACTIVATE = Command.ACTIVATE
 
 
-class CommandMap(typing.Mapping[str, typing.Union[str, Command, None]]):
+class CommandMap(MutableMapping[str, typing.Union[str, Command, None]]):
     """
     dict-like object for looking up commands from keystrokes
 
@@ -84,10 +88,10 @@ class CommandMap(typing.Mapping[str, typing.Union[str, Command, None]]):
         return len(self._command)
 
     _command_defaults: typing.ClassVar[dict[str, str | Command]] = {
-        "tab": "next selectable",
-        "ctrl n": "next selectable",
-        "shift tab": "prev selectable",
-        "ctrl p": "prev selectable",
+        "tab": Command.SELECT_NEXT,
+        "ctrl n": Command.SELECT_NEXT,
+        "shift tab": Command.SELECT_PREVIOUS,
+        "ctrl p": Command.SELECT_PREVIOUS,
         "ctrl l": Command.REDRAW_SCREEN,
         "esc": Command.MENU,
         "up": Command.UP,
@@ -103,10 +107,10 @@ class CommandMap(typing.Mapping[str, typing.Union[str, Command, None]]):
     }
 
     def __init__(self) -> None:
-        self._command = dict(self._command_defaults)
+        self._command = self._command_defaults.copy()
 
     def restore_defaults(self) -> None:
-        self._command = dict(self._command_defaults)
+        self._command = self._command_defaults.copy()
 
     def __getitem__(self, key: str) -> str | Command | None:
         return self._command.get(key, None)
@@ -128,7 +132,7 @@ class CommandMap(typing.Mapping[str, typing.Union[str, Command, None]]):
         it separate from a shared one.
         """
         c = self.__class__()
-        c._command = dict(self._command)
+        c._command = dict(self._command)  # pylint: disable=protected-access
         return c
 
 

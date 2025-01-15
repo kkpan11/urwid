@@ -1,24 +1,32 @@
 from __future__ import annotations
 
 import typing
-import warnings
 
-from .constants import Align, Sizing, WrapMode
+from .constants import BAR_SYMBOLS, Align, Sizing, WrapMode
 from .text import Text
 from .widget import Widget
 
 if typing.TYPE_CHECKING:
+    from collections.abc import Hashable
+
     from urwid.canvas import TextCanvas
 
 
 class ProgressBar(Widget):
     _sizing = frozenset([Sizing.FLOW])
 
-    eighths = " ▏▎▍▌▋▊▉"
+    eighths = BAR_SYMBOLS.HORISONTAL[:8]  # Full width line is made by style
 
     text_align = Align.CENTER
 
-    def __init__(self, normal, complete, current: int = 0, done: int = 100, satt=None):
+    def __init__(
+        self,
+        normal: Hashable | None,
+        complete: Hashable | None,
+        current: int = 0,
+        done: int = 100,
+        satt: Hashable | None = None,
+    ) -> None:
         """
         :param normal: display attribute for incomplete part of progress bar
         :param complete: display attribute for complete part of progress bar
@@ -26,9 +34,10 @@ class ProgressBar(Widget):
         :param done: progress amount at 100%
         :param satt: display attribute for smoothed part of bar where the
                      foreground of satt corresponds to the normal part and the
-                     background corresponds to the complete part.  If satt
-                     is ``None`` then no smoothing will be done.
+                     background corresponds to the complete part.
+                     If satt is ``None`` then no smoothing will be done.
 
+        >>> from urwid import LineBox
         >>> pb = ProgressBar('a', 'b')
         >>> pb
         <ProgressBar flow widget>
@@ -50,14 +59,21 @@ class ProgressBar(Widget):
         >>> for x in range(101):
         ...     cpb2.set_completion(x)
         ...     s = cpb2.render((10, ))
+        >>> pb = ProgressBar('a', 'b', satt='c')
+        >>> pb.set_completion(34.56)
+        >>> print(LineBox(pb).render((20,)))
+        ┌──────────────────┐
+        │      ▏34 %       │
+        └──────────────────┘
         """
+        super().__init__()
         self.normal = normal
         self.complete = complete
         self._current = current
         self._done = done
         self.satt = satt
 
-    def set_completion(self, current):
+    def set_completion(self, current: int) -> None:
         """
         current -- current progress
         """
@@ -78,16 +94,7 @@ class ProgressBar(Widget):
         self._done = done
         self._invalidate()
 
-    def _set_done(self, done):
-        warnings.warn(
-            f"Method `{self.__class__.__name__}._set_done` is deprecated, "
-            f"please use property `{self.__class__.__name__}.done`",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.done = done
-
-    def rows(self, size, focus: bool = False) -> int:
+    def rows(self, size: tuple[int], focus: bool = False) -> int:
         return 1
 
     def get_text(self) -> str:
@@ -98,13 +105,17 @@ class ProgressBar(Widget):
         percent = min(100, max(0, int(self.current * 100 / self.done)))
         return f"{percent!s} %"
 
-    def render(self, size: tuple[int], focus: bool = False) -> TextCanvas:
+    def render(
+        self,
+        size: tuple[int],  # type: ignore[override]
+        focus: bool = False,
+    ) -> TextCanvas:
         """
         Render the progress bar.
         """
+        # pylint: disable=protected-access
         (maxcol,) = size
-        txt = Text(self.get_text(), self.text_align, WrapMode.CLIP)
-        c = txt.render((maxcol,))
+        c = Text(self.get_text(), self.text_align, WrapMode.CLIP).render((maxcol,))
 
         cf = float(self.current) * maxcol / self.done
         ccol_dirty = int(cf)
@@ -112,7 +123,7 @@ class ProgressBar(Widget):
         cs = 0
         if self.satt is not None:
             cs = int((cf - ccol) * 8)
-        if ccol < 0 or (ccol == 0 and cs == 0):
+        if ccol < 0 or (ccol == cs == 0):
             c._attr = [[(self.normal, maxcol)]]
         elif ccol >= maxcol:
             c._attr = [[(self.complete, maxcol)]]
