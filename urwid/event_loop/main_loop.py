@@ -1,5 +1,3 @@
-#!/usr/bin/python
-#
 # Urwid main loop code
 #    Copyright (C) 2004-2012  Ian Ward
 #    Copyright (C) 2008 Walter Mundt
@@ -24,18 +22,20 @@
 
 from __future__ import annotations
 
-import contextlib
 import heapq
+import logging
 import os
+import sys
 import time
 import typing
 import warnings
+from contextlib import suppress
 
-from urwid import raw_display, signals
+from urwid import display, signals
 from urwid.command_map import Command, command_map
-from urwid.display_common import INPUT_DESCRIPTORS_CHANGED
+from urwid.display.common import INPUT_DESCRIPTORS_CHANGED
 from urwid.util import StoppingContext, is_mouse_event
-from urwid.wimp import PopUpTarget
+from urwid.widget import PopUpTarget
 
 from .abstract_loop import ExitMainLoop
 from .select_loop import SelectEventLoop
@@ -43,15 +43,17 @@ from .select_loop import SelectEventLoop
 if typing.TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-    from urwid.display_common import BaseScreen
+    from typing_extensions import Self
+
+    from urwid.display import BaseScreen
     from urwid.widget import Widget
 
+    from .abstract_loop import EventLoop
 
-try:  # noqa: SIM105
-    import fcntl
-except ImportError:
-    pass  # windows
+    _T = typing.TypeVar("_T")
 
+
+IS_WINDOWS = sys.platform == "win32"
 PIPE_BUFFER_READ_SIZE = 4096  # can expect this much on Linux, so try for that
 
 __all__ = ("CantUseExternalLoop", "MainLoop")
@@ -110,26 +112,30 @@ class MainLoop:
     def __init__(
         self,
         widget: Widget,
-        palette=(),
+        palette: Iterable[
+            tuple[str, str] | tuple[str, str, str] | tuple[str, str, str, str] | tuple[str, str, str, str, str, str]
+        ] = (),
         screen: BaseScreen | None = None,
         handle_mouse: bool = True,
         input_filter: Callable[[list[str], list[int]], list[str]] | None = None,
-        unhandled_input: Callable[[str | tuple[str, int, int, int]], bool] | None = None,
-        event_loop=None,
+        unhandled_input: Callable[[str | tuple[str, int, int, int]], bool | None] | None = None,
+        event_loop: EventLoop | None = None,
         pop_ups: bool = False,
     ):
+        self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self._widget = widget
         self.handle_mouse = handle_mouse
+        self._pop_ups = False  # only initialize placeholder
         self.pop_ups = pop_ups  # triggers property setting side-effect
 
         if not screen:
-            screen = raw_display.Screen()
+            screen = display.raw.Screen()
 
         if palette:
             screen.register_palette(palette)
 
-        self.screen = screen
-        self.screen_size = None
+        self.screen: BaseScreen = screen
+        self.screen_size: tuple[int, int] | None = None
 
         self._unhandled_input = unhandled_input
         self._input_filter = input_filter
@@ -138,7 +144,7 @@ class MainLoop:
             raise NotImplementedError(f"screen object passed {screen!r} does not support external event loops")
         if event_loop is None:
             event_loop = SelectEventLoop()
-        self.event_loop = event_loop
+        self.event_loop: EventLoop = event_loop
 
         if hasattr(self.screen, "signal_handler_setter"):
             # Tell the screen what function it must use to set
@@ -173,18 +179,18 @@ class MainLoop:
         self.widget = widget
 
     @property
-    def pop_ups(self):
+    def pop_ups(self) -> bool:
         return self._pop_ups
 
     @pop_ups.setter
-    def pop_ups(self, pop_ups) -> None:
+    def pop_ups(self, pop_ups: bool) -> None:
         self._pop_ups = pop_ups
         if pop_ups:
             self._topmost_widget = PopUpTarget(self._widget)
         else:
             self._topmost_widget = self._widget
 
-    def _set_pop_ups(self, pop_ups) -> None:
+    def _set_pop_ups(self, pop_ups: bool) -> None:
         warnings.warn(
             f"method `{self.__class__.__name__}._set_pop_ups` is deprecated, "
             f"please use `{self.__class__.__name__}.pop_ups` property",
@@ -193,7 +199,7 @@ class MainLoop:
         )
         self.pop_ups = pop_ups
 
-    def set_alarm_in(self, sec, callback, user_data=None):
+    def set_alarm_in(self, sec: float, callback: Callable[[Self, _T], typing.Any], user_data: _T = None):
         """
         Schedule an alarm in *sec* seconds that will call *callback* from the
         within the :meth:`run` method.
@@ -203,14 +209,17 @@ class MainLoop:
         :param callback: function to call with two parameters: this main loop
                          object and *user_data*
         :type callback: callable
+        :param user_data: optional user data to pass to the callback
+        :type user_data: object
         """
+        self.logger.debug(f"Setting alarm in {sec!r} seconds with callback {callback!r}")
 
-        def cb():
+        def cb() -> None:
             callback(self, user_data)
 
         return self.event_loop.alarm(sec, cb)
 
-    def set_alarm_at(self, tm, callback, user_data=None):
+    def set_alarm_at(self, tm: float, callback: Callable[[Self, _T], typing.Any], user_data: _T = None):
         """
         Schedule an alarm at *tm* time that will call *callback* from the
         within the :meth:`run` function. Returns a handle that may be passed to
@@ -221,88 +230,91 @@ class MainLoop:
         :param callback: function to call with two parameters: this main loop
                          object and *user_data*
         :type callback: callable
+        :param user_data: optional user data to pass to the callback
+        :type user_data: object
         """
+        sec = tm - time.time()
+        self.logger.debug(f"Setting alarm in {sec!r} seconds with callback {callback!r}")
 
-        def cb():
+        def cb() -> None:
             callback(self, user_data)
 
-        return self.event_loop.alarm(tm - time.time(), cb)
+        return self.event_loop.alarm(sec, cb)
 
-    def remove_alarm(self, handle):
+    def remove_alarm(self, handle) -> bool:
         """
         Remove an alarm. Return ``True`` if *handle* was found, ``False``
         otherwise.
         """
         return self.event_loop.remove_alarm(handle)
 
-    def watch_pipe(self, callback):
-        """
-        Create a pipe for use by a subprocess or thread to trigger a callback
-        in the process/thread running the main loop.
+    if not IS_WINDOWS:
 
-        :param callback: function taking one parameter to call from within
-                         the process/thread running the main loop
-        :type callback: callable
+        def watch_pipe(self, callback: Callable[[bytes], bool | None]) -> int:
+            """
+            Create a pipe for use by a subprocess or thread to trigger a callback
+            in the process/thread running the main loop.
 
-        This method returns a file descriptor attached to the write end of a
-        pipe. The read end of the pipe is added to the list of files
-        :attr:`event_loop` is watching. When data is written to the pipe the
-        callback function will be called and passed a single value containing
-        data read from the pipe.
+            :param callback: function taking one parameter to call from within the process/thread running the main loop
+            :type callback: callable
 
-        This method may be used any time you want to update widgets from
-        another thread or subprocess.
+            This method returns a file descriptor attached to the write end of a pipe.
+            The read end of the pipe is added to the list of files :attr:`event_loop` is watching.
+            When data is written to the pipe the callback function will be called
+            and passed a single value containing data read from the pipe.
 
-        Data may be written to the returned file descriptor with
-        ``os.write(fd, data)``. Ensure that data is less than 512 bytes (or 4K
-        on Linux) so that the callback will be triggered just once with the
-        complete value of data passed in.
+            This method may be used any time you want to update widgets from another thread or subprocess.
 
-        If the callback returns ``False`` then the watch will be removed from
-        :attr:`event_loop` and the read end of the pipe will be closed. You
-        are responsible for closing the write end of the pipe with
-        ``os.close(fd)``.
-        """
-        pipe_rd, pipe_wr = os.pipe()
-        fcntl.fcntl(pipe_rd, fcntl.F_SETFL, os.O_NONBLOCK)
-        watch_handle = None
+            Data may be written to the returned file descriptor with ``os.write(fd, data)``.
+            Ensure that data is less than 512 bytes (or 4K on Linux)
+            so that the callback will be triggered just once with the complete value of data passed in.
 
-        def cb() -> None:
-            data = os.read(pipe_rd, PIPE_BUFFER_READ_SIZE)
-            rval = callback(data)
-            if rval is False:
-                self.event_loop.remove_watch_file(watch_handle)
-                os.close(pipe_rd)
+            If the callback returns ``False`` then the watch will be removed from :attr:`event_loop`
+            and the read end of the pipe will be closed.
+            You are responsible for closing the write end of the pipe with ``os.close(fd)``.
+            """
+            import fcntl
 
-        watch_handle = self.event_loop.watch_file(pipe_rd, cb)
-        self._watch_pipes[pipe_wr] = (watch_handle, pipe_rd)
-        return pipe_wr
+            pipe_rd, pipe_wr = os.pipe()
+            fcntl.fcntl(pipe_rd, fcntl.F_SETFL, os.O_NONBLOCK)
+            watch_handle = None
 
-    def remove_watch_pipe(self, write_fd):
-        """
-        Close the read end of the pipe and remove the watch created by
-        :meth:`watch_pipe`. You are responsible for closing the write end of
-        the pipe.
+            def cb() -> None:
+                data = os.read(pipe_rd, PIPE_BUFFER_READ_SIZE)
+                if callback(data) is False:
+                    self.event_loop.remove_watch_file(watch_handle)
+                    os.close(pipe_rd)
 
-        Returns ``True`` if the watch pipe exists, ``False`` otherwise
-        """
-        try:
-            watch_handle, pipe_rd = self._watch_pipes.pop(write_fd)
-        except KeyError:
-            return False
+            watch_handle = self.event_loop.watch_file(pipe_rd, cb)
+            self._watch_pipes[pipe_wr] = (watch_handle, pipe_rd)
+            return pipe_wr
 
-        if not self.event_loop.remove_watch_file(watch_handle):
-            return False
-        os.close(pipe_rd)
-        return True
+        def remove_watch_pipe(self, write_fd: int) -> bool:
+            """
+            Close the read end of the pipe and remove the watch created by :meth:`watch_pipe`.
 
-    def watch_file(self, fd, callback):
+            ..note:: You are responsible for closing the write end of the pipe.
+
+            Returns ``True`` if the watch pipe exists, ``False`` otherwise
+            """
+            try:
+                watch_handle, pipe_rd = self._watch_pipes.pop(write_fd)
+            except KeyError:
+                return False
+
+            if not self.event_loop.remove_watch_file(watch_handle):
+                return False
+            os.close(pipe_rd)
+            return True
+
+    def watch_file(self, fd: int, callback: Callable[[], typing.Any]):
         """
         Call *callback* when *fd* has some data to read. No parameters are
         passed to callback.
 
         Returns a handle that may be passed to :meth:`remove_watch_file`.
         """
+        self.logger.debug(f"Setting watch file descriptor {fd!r} with {callback!r}")
         return self.event_loop.watch_file(fd, callback)
 
     def remove_watch_file(self, handle):
@@ -312,7 +324,7 @@ class MainLoop:
         """
         return self.event_loop.remove_watch_file(handle)
 
-    def run(self):
+    def run(self) -> None:
         """
         Start the main loop handling input events and updating the screen. The
         loop will continue until an :exc:`ExitMainLoop` exception is raised.
@@ -321,7 +333,7 @@ class MainLoop:
         method.  Instead, call :meth:`start` before starting the event loop,
         and :meth:`stop` once it's finished.
         """
-        with contextlib.suppress(ExitMainLoop):
+        with suppress(ExitMainLoop):
             self._run()
 
     def _test_run(self):
@@ -353,7 +365,7 @@ class MainLoop:
         screen.draw_screen((20, 10), 'fake canvas')
         """
 
-    def start(self):
+    def start(self) -> StoppingContext:
         """
         Sets up the main loop, hooking into the event loop where necessary.
         Starts the :attr:`screen` if it hasn't already been started.
@@ -372,15 +384,17 @@ class MainLoop:
         :exc:`ExitMainLoop` (or anything else) is raised.
         """
 
+        self.logger.debug(f"Starting event loop {self.event_loop.__class__.__name__!r} to manage display.")
+
         self.screen.start()
 
         if self.handle_mouse:
             self.screen.set_mouse_tracking()
 
         if not hasattr(self.screen, "hook_event_loop"):
-            raise CantUseExternalLoop("Screen {0!r} doesn't support external event loops")
+            raise CantUseExternalLoop(f"Screen {self.screen!r} doesn't support external event loops")
 
-        with contextlib.suppress(NameError):
+        with suppress(NameError):
             signals.connect_signal(self.screen, INPUT_DESCRIPTORS_CHANGED, self._reset_input_descriptors)
 
         # watch our input descriptors
@@ -446,21 +460,20 @@ class MainLoop:
         widget.mouse_event((15, 5), 'mouse press', 1, 5, 4, focus=True)
         >>> ml._update([], [])
         """
-        keys = self.input_filter(keys, raw)
-
-        if keys:
+        if keys := self.input_filter(keys, raw):
             self.process_input(keys)
             if "window resize" in keys:
                 self.screen_size = None
 
     def _run_screen_event_loop(self) -> None:
         """
-        This method is used when the screen does not support using
-        external event loops.
+        This method is used when the screen does not support using external event loops.
 
-        The alarms stored in the SelectEventLoop in :attr:`event_loop`
-        are modified by this method.
+        The alarms stored in the SelectEventLoop in :attr:`event_loop` are modified by this method.
         """
+        # pylint: disable=protected-access  # special case for alarms handling
+        self.logger.debug(f"Starting screen {self.screen!r} event loop")
+
         next_alarm = None
 
         while True:
@@ -473,26 +486,21 @@ class MainLoop:
             raw: list[int] = []
             while not keys:
                 if next_alarm:
-                    sec = max(0, next_alarm[0] - time.time())
+                    sec = max(0.0, next_alarm[0] - time.time())
                     self.screen.set_input_timeouts(sec)
                 else:
                     self.screen.set_input_timeouts(None)
                 keys, raw = self.screen.get_input(True)
-                if not keys and next_alarm:
-                    sec = next_alarm[0] - time.time()
-                    if sec <= 0:
-                        break
+                if not keys and next_alarm and next_alarm[0] - time.time() <= 0:
+                    break
 
-            keys = self.input_filter(keys, raw)
-
-            if keys:
+            if keys := self.input_filter(keys, raw):
                 self.process_input(keys)
 
             while next_alarm:
-                sec = next_alarm[0] - time.time()
-                if sec > 0:
+                if (next_alarm[0] - time.time()) > 0:
                     break
-                tm, tie_break, callback = next_alarm
+                _tm, _tie_break, callback = next_alarm
                 callback()
 
                 if self.event_loop._alarms:
@@ -520,7 +528,7 @@ class MainLoop:
         screen.get_cols_rows()
         widget.render((10, 5), focus=True)
         screen.draw_screen((10, 5), None)
-        screen.set_input_timeouts(0)
+        screen.set_input_timeouts(0.0)
         screen.get_input(True)
         """
 
@@ -536,41 +544,47 @@ class MainLoop:
         Returns ``True`` if any key was handled by a widget or the
         :meth:`unhandled_input` method.
         """
+        self.logger.debug(f"Processing input: keys={keys!r}")
         if not self.screen_size:
             self.screen_size = self.screen.get_cols_rows()
 
         something_handled = False
 
-        for k in keys:
-            if k == "window resize":
+        for key in keys:
+            if key == "window resize":
                 continue
 
-            if isinstance(k, str):
+            if isinstance(key, str):
                 if self._topmost_widget.selectable():
-                    k = self._topmost_widget.keypress(self.screen_size, k)  # noqa: PLW2901
+                    if handled_key := self._topmost_widget.keypress(self.screen_size, key):
+                        key = handled_key  # noqa: PLW2901
 
-            elif isinstance(k, tuple):
-                if is_mouse_event(k):
-                    event, button, col, row = k
-                    if hasattr(self._topmost_widget, "mouse_event") and self._topmost_widget.mouse_event(
-                        self.screen_size,
-                        event,
-                        button,
-                        col,
-                        row,
-                        focus=True,
-                    ):
-                        k = None  # noqa: PLW2901
+                    else:
+                        something_handled = True
+                        continue
+
+            elif is_mouse_event(key):
+                event, button, col, row = key
+                if hasattr(self._topmost_widget, "mouse_event") and self._topmost_widget.mouse_event(
+                    self.screen_size,
+                    event,
+                    button,
+                    col,
+                    row,
+                    focus=True,
+                ):
+                    something_handled = True
+                    continue
 
             else:
-                raise TypeError(f"{k!r} is not str | tuple[str, int, int, int]")
+                raise TypeError(f"{key!r} is not str | tuple[str, int, int, int]")
 
-            if k:
-                if command_map[k] == Command.REDRAW_SCREEN:
+            if key:
+                if command_map[key] == Command.REDRAW_SCREEN:
                     self.screen.clear()
                     something_handled = True
                 else:
-                    something_handled |= bool(self.unhandled_input(k))
+                    something_handled |= bool(self.unhandled_input(key))
             else:
                 something_handled = True
 
@@ -603,7 +617,7 @@ class MainLoop:
             return self._input_filter(keys, raw)
         return keys
 
-    def unhandled_input(self, data: str | tuple[str, int, int, int]) -> bool:
+    def unhandled_input(self, data: str | tuple[str, int, int, int]) -> bool | None:
         """
         This function is called with any input that was not handled by the
         widgets, and calls the *unhandled_input* function passed to the
@@ -619,7 +633,7 @@ class MainLoop:
             return self._unhandled_input(data)
         return False
 
-    def entering_idle(self):
+    def entering_idle(self) -> None:
         """
         This method is called whenever the event loop is about to enter the
         idle state. :meth:`draw_screen` is called here to update the
@@ -627,8 +641,10 @@ class MainLoop:
         """
         if self.screen.started:
             self.draw_screen()
+        else:
+            self.logger.debug(f"No redrawing screen: {self.screen!r} is not started.")
 
-    def draw_screen(self):
+    def draw_screen(self) -> None:
         """
         Render the widgets and paint the screen. This method is called
         automatically from :meth:`entering_idle`.
@@ -639,6 +655,7 @@ class MainLoop:
         """
         if not self.screen_size:
             self.screen_size = self.screen.get_cols_rows()
+            self.logger.debug(f"Screen size recalculated: {self.screen_size!r}")
 
         canvas = self._topmost_widget.render(self.screen_size, focus=True)
         self.screen.draw_screen(self.screen_size, canvas)

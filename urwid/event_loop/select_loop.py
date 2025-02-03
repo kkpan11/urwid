@@ -25,33 +25,63 @@ from __future__ import annotations
 
 import contextlib
 import heapq
-import select
+import logging
+import selectors
 import time
 import typing
+from contextlib import suppress
 from itertools import count
 
 from .abstract_loop import EventLoop, ExitMainLoop
 
 if typing.TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+    from concurrent.futures import Executor, Future
 
-    from typing_extensions import Literal
+    from typing_extensions import Literal, ParamSpec
+
+    _T = typing.TypeVar("_T")
+    _Spec = ParamSpec("_Spec")
 
 __all__ = ("SelectEventLoop",)
 
 
 class SelectEventLoop(EventLoop):
     """
-    Event loop based on :func:`select.select`
+    Event loop based on :func:`selectors.DefaultSelector.select`
     """
 
     def __init__(self) -> None:
+        super().__init__()
+        self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self._alarms: list[tuple[float, int, Callable[[], typing.Any]]] = []
         self._watch_files: dict[int, Callable[[], typing.Any]] = {}
         self._idle_handle: int = 0
         self._idle_callbacks: dict[int, Callable[[], typing.Any]] = {}
         self._tie_break: Iterator[int] = count()
         self._did_something: bool = False
+
+    def run_in_executor(
+        self,
+        executor: Executor,
+        func: Callable[_Spec, _T],
+        *args: _Spec.args,
+        **kwargs: _Spec.kwargs,
+    ) -> Future[_T]:
+        """Run callable in executor.
+
+        :param executor: Executor to use for running the function
+        :type executor: concurrent.futures.Executor
+        :param func: function to call
+        :type func: Callable
+        :param args: positional arguments to function
+        :type args: object
+        :param kwargs: keyword arguments to function
+        :type kwargs: object
+        :return: future object for the function call outcome.
+        :rtype: concurrent.futures.Future
+        """
+        return executor.submit(func, *args, **kwargs)
 
     def alarm(
         self,
@@ -145,49 +175,56 @@ class SelectEventLoop(EventLoop):
         Start the event loop.  Exit the loop when any callback raises
         an exception.  If ExitMainLoop is raised, exit cleanly.
         """
-        try:
+        with contextlib.suppress(ExitMainLoop):
             self._did_something = True
             while True:
-                with contextlib.suppress(InterruptedError):
+                with suppress(InterruptedError):
                     self._loop()
-
-        except ExitMainLoop:
-            pass
 
     def _loop(self) -> None:
         """
         A single iteration of the event loop
         """
-        fds = list(self._watch_files)
-        if self._alarms or self._did_something:
-            timeout = 0.0
-            tm: float | Literal["idle"] | None = None
+        tm: float | Literal["idle"] | None = None
 
-            if self._alarms:
-                timeout_ = self._alarms[0][0]
-                tm = timeout_
-                timeout = max(timeout, timeout_ - time.time())
+        with selectors.DefaultSelector() as selector:
+            for fd, callback in self._watch_files.items():
+                selector.register(fd, selectors.EVENT_READ, callback)
 
-            if self._did_something and (not self._alarms or (self._alarms and timeout > 0)):
+            if self._alarms or self._did_something:
                 timeout = 0.0
-                tm = "idle"
 
-            ready, w, err = select.select(fds, [], fds, timeout)
+                if self._alarms:
+                    timeout_ = self._alarms[0][0]
+                    tm = timeout_
+                    timeout = max(timeout, timeout_ - time.time())
 
-        else:
-            tm = None
-            ready, w, err = select.select(fds, [], fds)
+                if self._did_something and (not self._alarms or (self._alarms and timeout > 0)):
+                    timeout = 0.0
+                    tm = "idle"
+
+                self.logger.debug(f"Waiting for input: timeout={timeout!r}")
+                ready = [event for event, _ in selector.select(timeout)]
+
+            elif self._watch_files:
+                self.logger.debug("Waiting for input: timeout")
+                ready = [event for event, _ in selector.select()]
+            else:
+                ready = []
 
         if not ready:
             if tm == "idle":
+                self.logger.debug("No input, entering IDLE")
                 self._entering_idle()
                 self._did_something = False
             elif tm is not None:
                 # must have been a timeout
-                tm, tie_break, alarm_callback = heapq.heappop(self._alarms)
+                tm, _tie_break, alarm_callback = heapq.heappop(self._alarms)
+                self.logger.debug(f"No input in timeout, calling scheduled {alarm_callback!r}")
                 alarm_callback()
                 self._did_something = True
 
-        for fd in ready:
-            self._watch_files[fd]()
+        self.logger.debug("Processing input")
+        for record in ready:
+            record.data()
             self._did_something = True

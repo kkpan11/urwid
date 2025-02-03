@@ -262,11 +262,11 @@ an unbounded number of positions, so care should be used with this interface and
 Pile Widgets
 ------------
 
-:class:`Pile` widgets are used to combine multiple widgets by
-stacking them vertically. A Pile can manage selectable widgets by keeping track
+:class:`Pile` widgets are used to combine multiple widgets by stacking them vertically.
+A Pile can manage selectable widgets by keeping track
 of which widget is in focus and it can handle moving the focus between widgets
-when the user presses the *UP* and *DOWN* keys. A Pile will also work well when
-used within a :class:`ListBox`.
+when the user presses the *UP* and *DOWN* keys.
+A Pile will also work well when used within a :class:`ListBox`.
 
 A Pile is selectable only if its focus widget is selectable. If you create a
 Pile containing one Text widget and one Edit widget the Pile will choose the
@@ -276,26 +276,24 @@ Edit widget as its default focus widget.
 Columns Widgets
 ---------------
 
-:class:`Columns` widgets may be used to arrange either flow
-widgets or box widgets horizontally into columns. Columns widgets will manage
-selectable widgets by keeping track of which column is in focus and it can
-handle moving the focus between columns when the user presses the *LEFT* and
-*RIGHT* keys. Columns widgets also work well when used within a
-:class:`ListBox`.
+:class:`Columns` widgets may be used to arrange either flow widgets,
+box widgets or fixed widgets horizontally into columns.
+Columns widgets will manage selectable widgets by keeping track of which column is in focus and it can
+handle moving the focus between columns when the user presses the *LEFT* and *RIGHT* keys.
+Columns widgets also work well when used within a :class:`ListBox`.
 
-Columns widgets are selectable only if the column in focus is selectable. If a
-focus column is not specified the first selectable widget will be chosen as the
+Columns widgets are selectable only if the column in focus is selectable.
+If a focus column is not specified the first selectable widget will be chosen as the
 focus column.
 
 
 GridFlow Widgets
 ----------------
 
-The :class:`GridFlow` widget is a flow widget designed for use
-with :class:`Button`, :class:`CheckBox` and
-:class:`RadioButton` widgets. It renders all the widgets it
-contains the same width and it arranges them from left to right and top to
-bottom.
+The :class:`GridFlow` widget is a fixed/flow widget designed for use
+with :class:`Button`, :class:`CheckBox` and :class:`RadioButton` widgets.
+It renders all the widgets it contains the same width
+and it arranges them from left to right and top to bottom.
 
 The GridFlow widget uses Pile, Columns, Padding and Divider widgets to build a
 display widget that will handle the keyboard input and rendering. When the
@@ -306,17 +304,99 @@ new space.
 Overlay Widgets
 ---------------
 
-The :class:`Overlay` widget is a box widget that contains two
-other box widgets. The bottom widget is rendered the full size of the Overlay
-widget and the top widget is placed on top, obscuring an area of the bottom
-widget. This widget can be used to create effects such as overlapping "windows"
-or pop-up menus.
+The :class:`Overlay` widget is a box/flow/fixed widget that contains two other widgets.
+The bottom widget is BOX rendered the full size of the Overlay widget
+and the top widget is placed on top, obscuring an area of the bottom widget.
+Widget sizing depends on the top widget sizing and sizing options.
+This widget can be used to create effects such as overlapping "windows" or pop-up menus.
 
-The Overlay widget always treats the top widget as the one in focus. All
-keyboard input will be passed to the top widget.
+The Overlay widget always treats the top widget as the one in focus.
+All keyboard input will be passed to the top widget.
 
-If you want to use a flow widget for the top widget, first wrap the flow
-widget with a :class:`Filler` widget.
+If you want to use a flow widget for the bottom widget,
+first wrap the flow widget with a :class:`Filler` widget.
+
+
+Scrollable Widgets
+==================
+Scrollable widgets can scroll long content which normally not fit into the screen resolution.
+Scrolling is normally supported using keyboard positioning keys and mouse wheel.
+
+For scrolling is expected to be used :class:`ScrollBar` which accept any BOX widget supporting scrollable api.
+
+ScrollBar Widget
+----------------
+The :class:`ScrollBar` widget draw optional scrollbar on the right or left side of widget if scrolling is required
+(widget not fit in the desired amount of rows).
+The widget is always rendered BOX and wrapped widget is also should be BOX.
+In case of other widget types, they should be wrapped to support BOX sizing.
+
+* :class:`Scrollable` make any FLOW or FIXED widget compatible with scrollable api.
+* :class:`ListBox` can be used with :class:`ScrollBar` directly,
+  all input is always handled by :class:`ListBox` and it's widgets.
+
+Keyboard positioning keys and mouse wheel is used for scrolling if not handled by the wrapped widget.
+Scrolling is done on per-line basis.
+
+Scrollable Widget
+-----------------
+The :class:`Scrollable` widget is used to make  any FLOW or FIXED widget compatible with scrollable api by changing
+target widget render and scrolling along full-size / columns defined sized widget.
+
+Keyboard positioning keys and mouse wheel is used for scrolling if not handled by the wrapped widget.
+
+.. note::
+    :class:`Scrollable` do not recognize if selectable wrapped widget part visible or not
+    if wrapped widget do not draw cursor.
+    This means, keyboard input maybe forwarded to the wrapped selectable widget even if it not visible.
+    **Mouse input is not affected by this limitation** due to known column and raw of mouse event.
+
+
+Comparing to the :class:`ListBox`,
+:class:`Scrollable` handles fixed and flow widgets directly instead of using list of small widgets.
+:class:`ListBox` should be used to scroll between widgets, which can be multiline by itself.
+
+.. _scrollable-api:
+
+Scrollable API
+--------------
+Widget pretending to be scrolled via :class:`ScrollBar` should subclass :class:`Widget`
+and implement positioning API:
+
+.. currentmodule:: Scrollable
+
+.. py:method:: get_scrollpos(size=None, focus=False)
+
+    Get scrolling position
+
+    :param size: widget render size. If `size` is not given, the currently rendered number of rows is returned.
+    :type size: tuple[int, int] | None
+    :param focus: widget is focused
+    :type focus: bool
+    :return: the index of the first visible row.
+    :rtype: int
+
+.. py:method:: set_scrollpos(position: SupportsInt)
+
+    **Optional** method for setting scrolling position.
+
+    Method is called on mouse wheel scroll if it implemented and mouse event was not handled by widget.
+
+    If `position` is positive it is interpreted as lines from the top.
+    If `position` is negative it is interpreted as lines from the bottom.
+
+.. py:method:: rows_max(size=None, focus=False)
+
+    Get the total number of rows `widget` can render.
+
+    :param size: widget render size. If `size` is not given, the currently rendered number of rows is returned.
+    :type size: tuple[int, int] | None
+    :param focus: widget is focused
+    :type focus: bool
+    :return: the number of rows for `size`
+    :rtype: int
+
+.. currentmodule:: urwid
 
 
 .. _listbox-contents:
@@ -510,10 +590,9 @@ List Walker Interface
 List Walker API Version 1
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This API will remain available and is still the least restrictive option for
-the programmer.  Your class should subclass :class:`ListWalker`.
-Whenever the focus or content changes you are responsible for
-calling :meth:`ListWalker._modified`.
+This API will remain available and is still the least restrictive option fo the programmer.
+Your class should subclass :class:`ListWalker`.
+Whenever the focus or content changes you are responsible for calling :meth:`ListWalker._modified`.
 
 .. currentmodule:: MyV1ListWalker
 
@@ -579,8 +658,6 @@ When this is defined it will be used by :meth:`ListBox.__iter__` and
    return a forward or reverse iterable of positions
 
 .. currentmodule:: urwid
-
-
 
 Custom Widgets
 ==============

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urwid.canvas import SolidCanvas
 
-from .constants import Sizing
+from .constants import SHADE_SYMBOLS, Sizing
 from .widget import Widget
 
 
@@ -14,6 +14,8 @@ class SolidFill(Widget):
     _selectable = False
     ignore_focus = True
     _sizing = frozenset([Sizing.BOX])
+
+    Symbols = SHADE_SYMBOLS
 
     def __init__(self, fill_char: str = " ") -> None:
         """
@@ -29,7 +31,11 @@ class SolidFill(Widget):
     def _repr_words(self) -> list[str]:
         return [*super()._repr_words(), repr(self.fill_char)]
 
-    def render(self, size: tuple[int, int], focus: bool = False) -> SolidCanvas:
+    def render(
+        self,
+        size: tuple[int, int],  # type: ignore[override]
+        focus: bool = False,
+    ) -> SolidCanvas:
         """
         Render the Fill as a canvas and return it.
 

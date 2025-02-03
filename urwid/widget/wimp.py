@@ -29,12 +29,12 @@ from urwid.text_layout import calc_coords
 from urwid.util import is_mouse_press
 
 from .columns import Columns
-from .constants import Align, Sizing, WrapMode
+from .constants import Align, WrapMode
 from .text import Text
-from .widget import WidgetWrap
+from .widget import WidgetError, WidgetWrap
 
 if typing.TYPE_CHECKING:
-    from collections.abc import Callable, MutableSequence
+    from collections.abc import Callable, Hashable, MutableSequence
 
     from typing_extensions import Literal, Self
 
@@ -50,7 +50,7 @@ class SelectableIcon(Text):
 
     def __init__(
         self,
-        text,
+        text: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         cursor_position: int = 0,
         align: Literal["left", "center", "right"] | Align = Align.LEFT,
         wrap: Literal["space", "any", "clip", "ellipsis"] | WrapMode = WrapMode.SPACE,
@@ -75,14 +75,18 @@ class SelectableIcon(Text):
         super().__init__(text, align=align, wrap=wrap, layout=layout)
         self._cursor_position = cursor_position
 
-    def render(self, size: tuple[int], focus: bool = False) -> TextCanvas | CompositeCanvas:  # type: ignore[override]
+    def render(  # type: ignore[override]
+        self,
+        size: tuple[int] | tuple[()],  # type: ignore[override]
+        focus: bool = False,
+    ) -> TextCanvas | CompositeCanvas:  # type: ignore[override]
         """
         Render the text content of this widget with a cursor when
         in focus.
 
         >>> si = SelectableIcon(u"[!]")
         >>> si
-        <SelectableIcon selectable flow widget '[!]'>
+        <SelectableIcon selectable fixed/flow widget '[!]'>
         >>> si.render((4,), focus=True).cursor
         (0, 0)
         >>> si = SelectableIcon("((*))", 2)
@@ -90,6 +94,11 @@ class SelectableIcon(Text):
         (2, 0)
         >>> si.render((2,), focus=True).cursor
         (0, 1)
+        >>> si.render(()).cursor
+        >>> si.render(()).text
+        [b'((*))']
+        >>> si.render((), focus=True).cursor
+        (2, 0)
         """
         c: TextCanvas | CompositeCanvas = super().render(size, focus)
         if focus:
@@ -98,7 +107,7 @@ class SelectableIcon(Text):
             c.cursor = self.get_cursor_coords(size)
         return c
 
-    def get_cursor_coords(self, size: tuple[int]) -> tuple[int, int] | None:
+    def get_cursor_coords(self, size: tuple[int] | tuple[()]) -> tuple[int, int] | None:
         """
         Return the position of the cursor if visible.  This method
         is required for widgets that display a cursor.
@@ -107,14 +116,21 @@ class SelectableIcon(Text):
             return None
         # find out where the cursor will be displayed based on
         # the text layout
-        (maxcol,) = size
+        if size:
+            (maxcol,) = size
+        else:
+            maxcol, _ = self.pack()
         trans = self.get_line_translation(maxcol)
         x, y = calc_coords(self.text, trans, self._cursor_position)
         if maxcol <= x:
             return None
         return x, y
 
-    def keypress(self, size: tuple[int], key: str) -> str:
+    def keypress(
+        self,
+        size: tuple[int] | tuple[()],  # type: ignore[override]
+        key: str,
+    ) -> str:
         """
         No keys are handled by this widget.  This method is
         required for selectable widgets.
@@ -122,14 +138,11 @@ class SelectableIcon(Text):
         return key
 
 
-class CheckBoxError(Exception):
+class CheckBoxError(WidgetError):
     pass
 
 
-class CheckBox(WidgetWrap):
-    def sizing(self):
-        return frozenset([Sizing.FLOW])
-
+class CheckBox(WidgetWrap[Columns]):
     states: typing.ClassVar[dict[bool | Literal["mixed"], SelectableIcon]] = {
         True: SelectableIcon("[X]", 1),
         False: SelectableIcon("[ ]", 1),
@@ -145,54 +158,50 @@ class CheckBox(WidgetWrap):
     @typing.overload
     def __init__(
         self,
-        label,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: bool = False,
         has_mixed: typing.Literal[False] = False,
         on_state_change: Callable[[Self, bool, _T], typing.Any] | None = None,
         user_data: _T = ...,
         checked_symbol: str | None = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @typing.overload
     def __init__(
         self,
-        label,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: bool = False,
         has_mixed: typing.Literal[False] = False,
         on_state_change: Callable[[Self, bool], typing.Any] | None = None,
         user_data: None = None,
         checked_symbol: str | None = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @typing.overload
     def __init__(
         self,
-        label: str,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: typing.Literal["mixed"] | bool = False,
         has_mixed: typing.Literal[True] = True,
         on_state_change: Callable[[Self, bool | typing.Literal["mixed"], _T], typing.Any] | None = None,
         user_data: _T = ...,
         checked_symbol: str | None = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @typing.overload
     def __init__(
         self,
-        label: str,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: typing.Literal["mixed"] | bool = False,
         has_mixed: typing.Literal[True] = True,
         on_state_change: Callable[[Self, bool | typing.Literal["mixed"]], typing.Any] | None = None,
         user_data: None = None,
         checked_symbol: str | None = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def __init__(
         self,
-        label,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: bool | Literal["mixed"] = False,
         has_mixed: typing.Literal[False, True] = False,  # MyPy issue: Literal[True, False] is not equal `bool`
         on_state_change: (
@@ -213,6 +222,8 @@ class CheckBox(WidgetWrap):
                                 function call for a single callback
         :param user_data: user_data for on_state_change
 
+        ..note:: `pack` method expect, that `Columns` backend widget is not modified from outside
+
         Signals supported: ``'change'``, ``"postchange"``
 
         Register signal handler with::
@@ -225,12 +236,12 @@ class CheckBox(WidgetWrap):
           urwid.disconnect_signal(check_box, 'change', callback, user_data)
 
         >>> CheckBox("Confirm")
-        <CheckBox selectable flow widget 'Confirm' state=False>
+        <CheckBox selectable fixed/flow widget 'Confirm' state=False>
         >>> CheckBox("Yogourt", "mixed", True)
-        <CheckBox selectable flow widget 'Yogourt' state='mixed'>
+        <CheckBox selectable fixed/flow widget 'Yogourt' state='mixed'>
         >>> cb = CheckBox("Extra onions", True)
         >>> cb
-        <CheckBox selectable flow widget 'Extra onions' state=True>
+        <CheckBox selectable fixed/flow widget 'Extra onions' state=True>
         >>> cb.render((20,), focus=True).text
         [b'[X] Extra onions    ']
         >>> CheckBox("Test", None)
@@ -260,13 +271,32 @@ class CheckBox(WidgetWrap):
             ),
         )
 
+    def pack(self, size: tuple[()] | tuple[int] | None = None, focus: bool = False) -> tuple[str, str]:
+        """Pack for widget.
+
+        :param size: size data. Special case: None - get minimal widget size to fit
+        :param focus: widget is focused
+
+        >>> cb = CheckBox("test")
+        >>> cb.pack((10,))
+        (10, 1)
+        >>> cb.pack()
+        (8, 1)
+        >>> ml_cb = CheckBox("Multi\\nline\\ncheckbox")
+        >>> ml_cb.pack()
+        (12, 3)
+        >>> ml_cb.pack((), True)
+        (12, 3)
+        """
+        return super().pack(size or (), focus)
+
     def _repr_words(self) -> list[str]:
         return [*super()._repr_words(), repr(self.label)]
 
-    def _repr_attrs(self):
-        return dict(super()._repr_attrs(), state=self.state)
+    def _repr_attrs(self) -> dict[str, typing.Any]:
+        return {**super()._repr_attrs(), "state": self.state}
 
-    def set_label(self, label):
+    def set_label(self, label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]]):
         """
         Change the check box label.
 
@@ -275,10 +305,10 @@ class CheckBox(WidgetWrap):
 
         >>> cb = CheckBox(u"foo")
         >>> cb
-        <CheckBox selectable flow widget 'foo' state=False>
+        <CheckBox selectable fixed/flow widget 'foo' state=False>
         >>> cb.set_label(('bright_attr', u"bar"))
         >>> cb
-        <CheckBox selectable flow widget 'bar' state=False>
+        <CheckBox selectable fixed/flow widget 'bar' state=False>
         """
         self._label.set_text(label)
         # no need to call self._invalidate(). WidgetWrap takes care of
@@ -408,7 +438,7 @@ class CheckBox(WidgetWrap):
         elif self.state == "mixed":
             self.set_state(False)
 
-    def mouse_event(self, size: tuple[int], event, button: int, x: int, y: int, focus: bool) -> bool:
+    def mouse_event(self, size: tuple[int], event: str, button: int, x: int, y: int, focus: bool) -> bool:
         """
         Toggle state on button 1 press.
 
@@ -438,29 +468,27 @@ class RadioButton(CheckBox):
     @typing.overload
     def __init__(
         self,
-        group: MutableSequence[CheckBox],
-        label,
+        group: MutableSequence[RadioButton],
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: bool | Literal["first True"] = ...,
         on_state_change: Callable[[Self, bool, _T], typing.Any] | None = None,
         user_data: _T = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @typing.overload
     def __init__(
         self,
-        group: MutableSequence[CheckBox],
-        label,
+        group: MutableSequence[RadioButton],
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: bool | Literal["first True"] = ...,
         on_state_change: Callable[[Self, bool], typing.Any] | None = None,
         user_data: None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def __init__(
         self,
-        group: MutableSequence[CheckBox],
-        label,
+        group: MutableSequence[RadioButton],
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         state: bool | Literal["first True"] = "first True",
         on_state_change: Callable[[Self, bool, _T], typing.Any] | Callable[[Self, bool], typing.Any] | None = None,
         user_data: _T | None = None,
@@ -472,6 +500,8 @@ class RadioButton(CheckBox):
         :param on_state_change: shorthand for connect_signal()
                                 function call for a single 'change' callback
         :param user_data: user_data for on_state_change
+
+        ..note:: `pack` method expect, that `Columns` backend widget is not modified from outside
 
         This function will append the new radio button to group.
         "first True" will set to True if group is empty.
@@ -493,9 +523,9 @@ class RadioButton(CheckBox):
         >>> len(bgroup)
         2
         >>> b1
-        <RadioButton selectable flow widget 'Agree' state=True>
+        <RadioButton selectable fixed/flow widget 'Agree' state=True>
         >>> b2
-        <RadioButton selectable flow widget 'Disagree' state=False>
+        <RadioButton selectable fixed/flow widget 'Disagree' state=False>
         >>> b2.render((15,), focus=True).text # ... = b in Python 3
         [...'( ) Disagree   ']
         """
@@ -530,10 +560,10 @@ class RadioButton(CheckBox):
         ...     radio_button.set_label(u"Think Harder!")
         >>> key = connect_signal(b3, 'change', relabel_button)
         >>> b3
-        <RadioButton selectable flow widget 'Unsure' state=False>
+        <RadioButton selectable fixed/flow widget 'Unsure' state=False>
         >>> b3.set_state(True) # this will trigger the callback
         >>> b3
-        <RadioButton selectable flow widget 'Think Harder!' state=True>
+        <RadioButton selectable fixed/flow widget 'Think Harder!' state=True>
         """
         if self._state == state:
             return
@@ -549,8 +579,8 @@ class RadioButton(CheckBox):
         for cb in self.group:
             if cb is self:
                 continue
-            if cb._state:
-                cb.set_state(False)
+            if cb.state:
+                cb.state = False
 
     def toggle_state(self) -> None:
         """
@@ -571,10 +601,7 @@ class RadioButton(CheckBox):
         self.set_state(True)
 
 
-class Button(WidgetWrap):
-    def sizing(self):
-        return frozenset([Sizing.FLOW])
-
+class Button(WidgetWrap[Columns]):
     button_left = Text("<")
     button_right = Text(">")
 
@@ -583,32 +610,30 @@ class Button(WidgetWrap):
     @typing.overload
     def __init__(
         self,
-        label,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         on_press: Callable[[Self, _T], typing.Any] | None = None,
         user_data: _T = ...,
         *,
         align: Literal["left", "center", "right"] | Align = ...,
         wrap: Literal["space", "any", "clip", "ellipsis"] | WrapMode = ...,
         layout: TextLayout | None = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @typing.overload
     def __init__(
         self,
-        label,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         on_press: Callable[[Self], typing.Any] | None = None,
         user_data: None = None,
         *,
         align: Literal["left", "center", "right"] | Align = ...,
         wrap: Literal["space", "any", "clip", "ellipsis"] | WrapMode = ...,
         layout: TextLayout | None = ...,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def __init__(
         self,
-        label,
+        label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]],
         on_press: Callable[[Self, _T], typing.Any] | Callable[[Self], typing.Any] | None = None,
         user_data: _T | None = None,
         *,
@@ -628,6 +653,8 @@ class Button(WidgetWrap):
         :param layout: defaults to a shared :class:`StandardTextLayout` instance
         :type layout: text layout instance
 
+        ..note:: `pack` method expect, that `Columns` backend widget is not modified from outside
+
         Signals supported: ``'click'``
 
         Register signal handler with::
@@ -639,8 +666,9 @@ class Button(WidgetWrap):
 
           urwid.disconnect_signal(button, 'click', callback, user_data)
 
+        >>> from urwid.util import set_temporary_encoding
         >>> Button(u"Ok")
-        <Button selectable flow widget 'Ok'>
+        <Button selectable fixed/flow widget 'Ok'>
         >>> b = Button("Cancel")
         >>> b.render((15,), focus=True).text # ... = b in Python 3
         [b'< Cancel      >']
@@ -648,7 +676,8 @@ class Button(WidgetWrap):
         >>> aligned_button.render((10,), focus=True).text
         [b'<  Test  >']
         >>> wrapped_button = Button("Long label", wrap=WrapMode.ELLIPSIS)
-        >>> wrapped_button.render((7,), focus=False).text[0].decode('utf-8')
+        >>> with set_temporary_encoding("utf-8"):
+        ...     wrapped_button.render((7,), focus=False).text[0].decode('utf-8')
         '< Lo… >'
         """
         self._label = SelectableIcon(label, 0, align=align, wrap=wrap, layout=layout)
@@ -663,11 +692,27 @@ class Button(WidgetWrap):
         if on_press:
             connect_signal(self, "click", on_press, user_data)
 
+    def pack(self, size: tuple[()] | tuple[int] | None = None, focus: bool = False) -> tuple[int, int]:
+        """Pack for widget.
+
+        :param size: size data. Special case: None - get minimal widget size to fit
+        :param focus: widget is focused
+
+        >>> btn = Button("Some button")
+        >>> btn.pack((10,))
+        (10, 2)
+        >>> btn.pack()
+        (15, 1)
+        >>> btn.pack((), True)
+        (15, 1)
+        """
+        return super().pack(size or (), focus)
+
     def _repr_words(self) -> list[str]:
         # include button.label in repr(button)
         return [*super()._repr_words(), repr(self.label)]
 
-    def set_label(self, label) -> None:
+    def set_label(self, label: str | tuple[Hashable, str] | list[str | tuple[Hashable, str]]) -> None:
         """
         Change the button label.
 
@@ -676,11 +721,11 @@ class Button(WidgetWrap):
         >>> b = Button("Ok")
         >>> b.set_label(u"Yup yup")
         >>> b
-        <Button selectable flow widget 'Yup yup'>
+        <Button selectable fixed/flow widget 'Yup yup'>
         """
         self._label.set_text(label)
 
-    def get_label(self) -> str:
+    def get_label(self) -> str | bytes:
         """
         Return label text.
 
@@ -717,7 +762,7 @@ class Button(WidgetWrap):
         self._emit("click")
         return None
 
-    def mouse_event(self, size: tuple[int], event, button: int, x: int, y: int, focus: bool) -> bool:
+    def mouse_event(self, size: tuple[int], event: str, button: int, x: int, y: int, focus: bool) -> bool:
         """
         Send 'click' signal on button 1 press.
 

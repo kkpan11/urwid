@@ -21,12 +21,13 @@
 from __future__ import annotations
 
 import functools
+import logging
 import typing
 import warnings
 from operator import attrgetter
 
 from urwid import signals
-from urwid.canvas import CanvasCache, CompositeCanvas
+from urwid.canvas import Canvas, CanvasCache, CompositeCanvas
 from urwid.command_map import command_map
 from urwid.split_repr import split_repr
 from urwid.util import MetaSuper
@@ -34,10 +35,13 @@ from urwid.util import MetaSuper
 from .constants import Sizing
 
 if typing.TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Hashable
+
+WrappedWidget = typing.TypeVar("WrappedWidget")
+LOGGER = logging.getLogger(__name__)
 
 
-class WidgetMeta(MetaSuper, signals.MetaSignals):
+class WidgetMeta(signals.MetaSignals, MetaSuper):
     """
     Bases: :class:`MetaSuper`, :class:`MetaSignals`
 
@@ -73,7 +77,11 @@ class WidgetMeta(MetaSuper, signals.MetaSignals):
 
 
 class WidgetError(Exception):
-    pass
+    """Widget specific errors."""
+
+
+class WidgetWarning(Warning):
+    """Widget specific warnings."""
 
 
 def validate_size(widget, size, canv):
@@ -97,8 +105,8 @@ def cache_widget_render(cls):
     @functools.wraps(fn)
     def cached_render(self, size, focus=False):
         focus = focus and not ignore_focus
-        canv = CanvasCache.fetch(self, cls, size, focus)
-        if canv:
+
+        if canv := CanvasCache.fetch(self, cls, size, focus):
             return canv
 
         canv = fn(self, size, focus=focus)
@@ -164,10 +172,10 @@ def cache_widget_rows(cls):
     fn = cls.rows
 
     @functools.wraps(fn)
-    def cached_rows(self, size, focus=False):
+    def cached_rows(self, size: tuple[int], focus: bool = False) -> int:
         focus = focus and not ignore_focus
-        canv = CanvasCache.fetch(self, cls, size, focus)
-        if canv:
+
+        if canv := CanvasCache.fetch(self, cls, size, focus):
             return canv.rows()
 
         return fn(self, size, focus)
@@ -182,8 +190,7 @@ class Widget(metaclass=WidgetMeta):
     .. attribute:: _selectable
        :annotation: = False
 
-       The default :meth:`.selectable` method returns this
-       value.
+       The default :meth:`.selectable` method returns this value.
 
     .. attribute:: _sizing
        :annotation: = frozenset(['flow', 'box', 'fixed'])
@@ -193,60 +200,7 @@ class Widget(metaclass=WidgetMeta):
     .. attribute:: _command_map
        :annotation: = urwid.command_map
 
-       A shared :class:`CommandMap` instance. May be redefined
-       in subclasses or widget instances.
-
-    .. method:: render(size, focus=False)
-
-       .. note::
-
-          This method is not implemented in :class:`.Widget` but
-          must be implemented by any concrete subclass
-
-       :param size: One of the following,
-                    *maxcol* and *maxrow* are integers > 0:
-
-                    (*maxcol*, *maxrow*)
-                      for box sizing -- the parent chooses the exact
-                      size of this widget
-
-                    (*maxcol*,)
-                      for flow sizing -- the parent chooses only the
-                      number of columns for this widget
-
-                    ()
-                      for fixed sizing -- this widget is a fixed size
-                      which can't be adjusted by the parent
-       :type size: widget size
-       :param focus: set to ``True`` if this widget or one of its children
-                     is in focus
-       :type focus: bool
-
-       :returns: A :class:`Canvas` subclass instance containing the
-                 rendered content of this widget
-
-       :class:`Text` widgets return a :class:`TextCanvas` (arbitrary text and
-       display attributes), :class:`SolidFill` widgets return a
-       :class:`SolidCanvas` (a single character repeated across
-       the whole surface) and container widgets return a
-       :class:`CompositeCanvas` (one or more other canvases
-       arranged arbitrarily).
-
-       If *focus* is ``False``, the returned canvas may not have a cursor
-       position set.
-
-       There is some metaclass magic defined in the :class:`Widget`
-       metaclass :class:`WidgetMeta` that causes the
-       result of this method to be cached by :class:`CanvasCache`.
-       Later calls will automatically look up the value in the cache first.
-
-       As a small optimization the class variable :attr:`ignore_focus`
-       may be defined and set to ``True`` if this widget renders the same
-       canvas regardless of the value of the *focus* parameter.
-
-       Any time the content of a widget changes it should call
-       :meth:`_invalidate` to remove any cached canvases, or the widget
-       may render the cached canvas instead of creating a new one.
+       A shared :class:`CommandMap` instance. May be redefined in subclasses or widget instances.
 
 
     .. method:: rows(size, focus=False)
@@ -258,8 +212,7 @@ class Widget(metaclass=WidgetMeta):
 
        See :meth:`Widget.render` for parameter details.
 
-       :returns: The number of rows required for this widget given a number
-                 of columns in *size*
+       :returns: The number of rows required for this widget given a number of columns in *size*
 
        This is the method flow widgets use to communicate their size to other
        widgets without having to render a canvas. This should be a quick
@@ -275,71 +228,6 @@ class Widget(metaclass=WidgetMeta):
        variable :attr:`ignore_focus` may be defined and set to ``True`` if this
        widget renders the same size regardless of the value of the *focus*
        parameter.
-
-
-    .. method:: keypress(size, key)
-
-       .. note::
-
-          This method is not implemented in :class:`.Widget` but
-          must be implemented by any selectable widget.
-          See :meth:`.selectable`.
-
-       :param size: See :meth:`Widget.render` for details
-       :type size: widget size
-       :param key: a single keystroke value; see :ref:`keyboard-input`
-       :type key: bytes or unicode
-
-       :returns: ``None`` if *key* was handled by this widget or
-                 *key* (the same value passed) if *key* was not handled
-                 by this widget
-
-       Container widgets will typically call the :meth:`keypress` method on
-       whichever of their children is set as the focus.
-
-       The standard widgets use :attr:`_command_map` to
-       determine what action should be performed for a given *key*. You may
-       modify these values to your liking globally, at some level in the
-       widget hierarchy or on individual widgets. See :class:`CommandMap`
-       for the defaults.
-
-       In your own widgets you may use whatever logic you like: filtering or
-       translating keys, selectively passing along events etc.
-
-
-
-    .. method:: mouse_event(size, event, button, col, row, focus)
-
-       .. note::
-
-          This method is not implemented in :class:`.Widget` but
-          may be implemented by a subclass.  Not implementing this
-          method is equivalent to having a method that always returns
-          ``False``.
-
-       :param size: See :meth:`Widget.render` for details.
-       :type size: widget size
-       :param event: Values such as ``'mouse press'``, ``'ctrl mouse press'``,
-                     ``'mouse release'``, ``'meta mouse release'``,
-                     ``'mouse drag'``; see :ref:`mouse-input`
-       :type event: mouse event
-       :param button: 1 through 5 for press events, often 0 for release events
-                      (which button was released is often not known)
-       :type button: int
-       :param col: Column of the event, 0 is the left edge of this widget
-       :type col: int
-       :param row: Row of the event, 0 it the top row of this widget
-       :type row: int
-       :param focus: Set to ``True`` if this widget or one of its children
-                     is in focus
-       :type focus: bool
-
-       :returns: ``True`` if the event was handled by this widget, ``False``
-                 otherwise
-
-       Container widgets will typically call the :meth:`mouse_event` method on
-       whichever of their children is at the position (*col*, *row*).
-
 
     .. method:: get_cursor_coords(size)
 
@@ -359,20 +247,17 @@ class Widget(metaclass=WidgetMeta):
        if no cursor is displayed.
 
        The :class:`ListBox` widget
-       uses this method to make sure a cursor in the focus widget is not
-       scrolled out of view.  It is a separate method to avoid having to render
-       the whole widget while calculating layout.
+       uses this method to make sure a cursor in the focus widget is not scrolled out of view.
+       It is a separate method to avoid having to render the whole widget while calculating layout.
 
-       Container widgets will typically call the :meth:`.get_cursor_coords`
-       method on their focus widget.
+       Container widgets will typically call the :meth:`.get_cursor_coords` method on their focus widget.
 
 
     .. method:: get_pref_col(size)
 
        .. note::
 
-          This method is not implemented in :class:`.Widget` but
-          may be implemented by a subclass.
+          This method is not implemented in :class:`.Widget` but may be implemented by a subclass.
 
        :param size: See :meth:`Widget.render` for details.
        :type size: widget size
@@ -395,9 +280,8 @@ class Widget(metaclass=WidgetMeta):
 
        .. note::
 
-          This method is not implemented in :class:`.Widget` but
-          may be implemented by a subclass.  Not implementing this
-          method is equivalent to having a method that always returns
+          This method is not implemented in :class:`.Widget` but may be implemented by a subclass.
+          Not implementing this method is equivalent to having a method that always returns
           ``False``.
 
        :param size: See :meth:`Widget.render` for details.
@@ -407,29 +291,25 @@ class Widget(metaclass=WidgetMeta):
        :param row: new row for the cursor, 0 it the top row of this widget
        :type row: int
 
-       :returns: ``True`` if the position was set successfully anywhere on
-                 *row*, ``False`` otherwise
+       :returns: ``True`` if the position was set successfully anywhere on *row*, ``False`` otherwise
     """
 
     _selectable = False
     _sizing = frozenset([Sizing.FLOW, Sizing.BOX, Sizing.FIXED])
     _command_map = command_map
 
+    def __init__(self) -> None:
+        self.logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
+
     def _invalidate(self) -> None:
-        """
-        Mark cached canvases rendered by this widget as dirty so that
-        they will not be used again.
-        """
+        """Mark cached canvases rendered by this widget as dirty so that they will not be used again."""
         CanvasCache.invalidate(self)
 
-    def _emit(self, name: str, *args):
-        """
-        Convenience function to emit signals with self as first
-        argument.
-        """
+    def _emit(self, name: Hashable, *args) -> None:
+        """Convenience function to emit signals with self as first argument."""
         signals.emit_signal(self, name, self, *args)
 
-    def selectable(self):
+    def selectable(self) -> bool:
         """
         :returns: ``True`` if this is a widget that is designed to take the
                   focus, i.e. it contains something the user might want to
@@ -450,7 +330,7 @@ class Widget(metaclass=WidgetMeta):
         """
         return self._selectable
 
-    def sizing(self):
+    def sizing(self) -> frozenset[Sizing]:
         """
         :returns: A frozenset including one or more of ``'box'``, ``'flow'`` and
                   ``'fixed'``.  Default implementation returns the value of
@@ -511,12 +391,12 @@ class Widget(metaclass=WidgetMeta):
         """
         if not size:
             if Sizing.FIXED in self.sizing():
-                raise NotImplementedError("Fixed widgets must override Widget.pack()")
+                raise NotImplementedError(f"{self!r} must override Widget.pack()")
             raise WidgetError(f"Cannot pack () size, this is not a fixed widget: {self!r}")
 
         if len(size) == 1:
             if Sizing.FLOW in self.sizing():
-                return (*size, self.rows(size, focus))
+                return (*size, self.rows(size, focus))  # pylint: disable=no-member  # can not announce abstract
 
             raise WidgetError(f"Cannot pack (maxcol,) size, this is not a flow widget: {self!r}")
 
@@ -524,19 +404,18 @@ class Widget(metaclass=WidgetMeta):
 
     @property
     def base_widget(self) -> Widget:
-        """
-        Read-only property that steps through decoration widgets
-        and returns the one at the base.  This default implementation
-        returns self.
+        """Read-only property that steps through decoration widgets and returns the one at the base.
+
+        This default implementation returns self.
         """
         return self
 
     @property
     def focus(self) -> Widget | None:
         """
-        Read-only property returning the child widget in focus for
-        container widgets.  This default implementation
-        always returns ``None``, indicating that this widget has no children.
+        Read-only property returning the child widget in focus for container widgets.
+
+        This default implementation always returns ``None``, indicating that this widget has no children.
         """
         return None
 
@@ -555,13 +434,13 @@ class Widget(metaclass=WidgetMeta):
     )
 
     def __repr__(self):
-        """
-        A friendly __repr__ for widgets, designed to be extended
-        by subclasses with _repr_words and _repr_attr methods.
+        """A friendly __repr__ for widgets.
+
+        Designed to be extended by subclasses with _repr_words and _repr_attr methods.
         """
         return split_repr(self)
 
-    def _repr_words(self):
+    def _repr_words(self) -> list[str]:
         words = []
         if self.selectable():
             words = ["selectable", *words]
@@ -569,135 +448,134 @@ class Widget(metaclass=WidgetMeta):
             words.append("/".join(sorted(self.sizing())))
         return [*words, "widget"]
 
-    def _repr_attrs(self):
+    def _repr_attrs(self) -> dict[str, typing.Any]:
         return {}
 
+    def keypress(
+        self,
+        size: tuple[()] | tuple[int] | tuple[int, int],
+        key: str,
+    ) -> str | None:
+        """Keyboard input handler.
 
-class FlowWidget(Widget):
-    """
-    Deprecated.  Inherit from Widget and add:
-
-        _sizing = frozenset(['flow'])
-
-    at the top of your class definition instead.
-
-    Base class of widgets that determine their rows from the number of
-    columns available.
-    """
-
-    _sizing = frozenset([Sizing.FLOW])
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            """
-            FlowWidget is deprecated. Inherit from Widget and add:
-
-                _sizing = frozenset(['flow'])
-
-            at the top of your class definition instead.""",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
-    def rows(self, size: int, focus: bool = False) -> int:
+        :param size: See :meth:`Widget.render` for details
+        :type size: tuple[()] | tuple[int] | tuple[int, int]
+        :param key: a single keystroke value; see :ref:`keyboard-input`
+        :type key: str
+        :return: ``None`` if *key* was handled by *key* (the same value passed) if *key* was not handled
+        :rtype: str | None
         """
-        All flow widgets must implement this function.
+        if not self.selectable():
+            if hasattr(self, "logger"):
+                self.logger.debug(f"keypress sent to non selectable widget {self!r}")
+            else:
+                warnings.warn(
+                    f"Widget {self.__class__.__name__} did not call 'super().__init__()",
+                    WidgetWarning,
+                    stacklevel=3,
+                )
+                LOGGER.debug(f"Widget {self!r} is not selectable")
+        return key
+
+    def mouse_event(
+        self,
+        size: tuple[()] | tuple[int] | tuple[int, int],
+        event: str,
+        button: int,
+        col: int,
+        row: int,
+        focus: bool,
+    ) -> bool | None:
+        """Mouse event handler.
+
+        :param size: See :meth:`Widget.render` for details.
+        :type size: tuple[()] | tuple[int] | tuple[int, int]
+        :param event: Values such as ``'mouse press'``, ``'ctrl mouse press'``,
+                     ``'mouse release'``, ``'meta mouse release'``,
+                     ``'mouse drag'``; see :ref:`mouse-input`
+        :type event: str
+        :param button: 1 through 5 for press events, often 0 for release events
+                      (which button was released is often not known)
+        :type button: int
+        :param col: Column of the event, 0 is the left edge of this widget
+        :type col: int
+        :param row: Row of the event, 0 it the top row of this widget
+        :type row: int
+        :param focus: Set to ``True`` if this widget or one of its children is in focus
+        :type focus: bool
+        :return: ``True`` if the event was handled by this widget, ``False`` otherwise
+        :rtype: bool | None
         """
-        raise NotImplementedError()
+        if not self.selectable():
+            if hasattr(self, "logger"):
+                self.logger.debug(f"Widget {self!r} is not selectable")
+            else:
+                warnings.warn(
+                    f"Widget {self.__class__.__name__} not called 'super().__init__()",
+                    WidgetWarning,
+                    stacklevel=3,
+                )
+                LOGGER.debug(f"Widget {self!r} is not selectable")
+        return False
 
-    def render(self, size: tuple[int], focus: bool = False):
+    def render(
+        self,
+        size: tuple[()] | tuple[int] | tuple[int, int],
+        focus: bool = False,
+    ) -> Canvas:
+        """Render widget and produce canvas
+
+        :param size: One of the following, *maxcol* and *maxrow* are integers > 0:
+
+            (*maxcol*, *maxrow*)
+              for box sizing -- the parent chooses the exact
+              size of this widget
+
+            (*maxcol*,)
+              for flow sizing -- the parent chooses only the
+              number of columns for this widget
+
+            ()
+              for fixed sizing -- this widget is a fixed size
+              which can't be adjusted by the parent
+        :type size: widget size
+        :param focus: set to ``True`` if this widget or one of its children is in focus
+        :type focus: bool
+
+        :returns: A :class:`Canvas` subclass instance containing the rendered content of this widget
+
+        :class:`Text` widgets return a :class:`TextCanvas` (arbitrary text and display attributes),
+        :class:`SolidFill` widgets return a :class:`SolidCanvas` (a single character repeated across the whole surface)
+        and container widgets return a :class:`CompositeCanvas` (one or more other canvases arranged arbitrarily).
+
+        If *focus* is ``False``, the returned canvas may not have a cursor position set.
+
+        There is some metaclass magic defined in the :class:`Widget` metaclass :class:`WidgetMeta`
+        that causes the result of this method to be cached by :class:`CanvasCache`.
+        Later calls will automatically look up the value in the cache first.
+
+        As a small optimization the class variable :attr:`ignore_focus`
+        may be defined and set to ``True`` if this widget renders the same
+        canvas regardless of the value of the *focus* parameter.
+
+        Any time the content of a widget changes it should call
+        :meth:`_invalidate` to remove any cached canvases, or the widget
+        may render the cached canvas instead of creating a new one.
         """
-        All widgets must implement this function.
-        """
-        raise NotImplementedError()
+        raise NotImplementedError
 
 
-class BoxWidget(Widget):
-    """
-    Deprecated.  Inherit from Widget and add:
-
-        _sizing = frozenset(['box'])
-        _selectable = True
-
-    at the top of your class definition instead.
-
-    Base class of width and height constrained widgets such as
-    the top level widget attached to the display object
-    """
-
-    _selectable = True
-    _sizing = frozenset([Sizing.BOX])
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            """
-            BoxWidget is deprecated. Inherit from Widget and add:
-
-                _sizing = frozenset(['box'])
-                _selectable = True
-
-            at the top of your class definition instead.""",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
-    def render(self, size: tuple[int, int], focus: bool = False):
-        """
-        All widgets must implement this function.
-        """
-        raise NotImplementedError()
-
-
-def fixed_size(size):
+def fixed_size(size: tuple[()]) -> None:
     """
     raise ValueError if size != ().
 
     Used by FixedWidgets to test size parameter.
     """
-    if size != ():
+    if size:
         raise ValueError(f"FixedWidget takes only () for size.passed: {size!r}")
 
 
-class FixedWidget(Widget):
-    """
-    Deprecated.  Inherit from Widget and add:
-
-        _sizing = frozenset(['fixed'])
-
-    at the top of your class definition instead.
-
-    Base class of widgets that know their width and height and
-    cannot be resized
-    """
-
-    _sizing = frozenset([Sizing.FIXED])
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            """
-            FixedWidget is deprecated. Inherit from Widget and add:
-
-                _sizing = frozenset(['fixed'])
-
-            at the top of your class definition instead.""",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
-    def render(self, size, focus=False):
-        """
-        All widgets must implement this function.
-        """
-        raise NotImplementedError()
-
-    def pack(self, size=None, focus=False):
-        """
-        All fixed widgets must implement this function.
-        """
-        raise NotImplementedError()
-
-
-def delegate_to_widget_mixin(attribute_name: str):
+def delegate_to_widget_mixin(attribute_name: str) -> type[Widget]:
     """
     Return a mixin class that delegates all standard widget methods
     to an attribute given by attribute_name.
@@ -721,37 +599,40 @@ def delegate_to_widget_mixin(attribute_name: str):
             return get_delegate(self).selectable
 
         @property
-        def get_cursor_coords(self):
+        def get_cursor_coords(self) -> Callable[[tuple[()] | tuple[int] | tuple[int, int]], tuple[int, int] | None]:
+            # TODO(Aleksei):  Get rid of property usage after getting rid of "if getattr"
             return get_delegate(self).get_cursor_coords
 
         @property
-        def get_pref_col(self):
+        def get_pref_col(self) -> Callable[[tuple[()] | tuple[int] | tuple[int, int]], int | None]:
+            # TODO(Aleksei):  Get rid of property usage after getting rid of "if getattr"
             return get_delegate(self).get_pref_col
 
-        @property
-        def keypress(self):
-            return get_delegate(self).keypress
+        def keypress(self, size: tuple[()] | tuple[int] | tuple[int, int], key: str) -> str | None:
+            return get_delegate(self).keypress(size, key)
 
         @property
-        def move_cursor_to_coords(self):
+        def move_cursor_to_coords(self) -> Callable[[[tuple[()] | tuple[int] | tuple[int, int], int, int]], bool]:
+            # TODO(Aleksei):  Get rid of property usage after getting rid of "if getattr"
             return get_delegate(self).move_cursor_to_coords
 
         @property
-        def rows(self):
+        def rows(self) -> Callable[[tuple[int], bool], int]:
             return get_delegate(self).rows
 
         @property
         def mouse_event(
             self,
-        ) -> Callable[[tuple[()] | tuple[int] | tuple[int, int], str, int, int, int, bool], bool | None,]:
+        ) -> Callable[[tuple[()] | tuple[int] | tuple[int, int], str, int, int, int, bool], bool | None]:
+            # TODO(Aleksei):  Get rid of property usage after getting rid of "if getattr"
             return get_delegate(self).mouse_event
 
         @property
-        def sizing(self):
+        def sizing(self) -> Callable[[], frozenset[Sizing]]:
             return get_delegate(self).sizing
 
         @property
-        def pack(self):
+        def pack(self) -> Callable[[tuple[()] | tuple[int] | tuple[int, int], bool], tuple[int, int]]:
             return get_delegate(self).pack
 
     return DelegateToWidgetMixin
@@ -761,8 +642,8 @@ class WidgetWrapError(Exception):
     pass
 
 
-class WidgetWrap(delegate_to_widget_mixin("_wrapped_widget"), Widget):
-    def __init__(self, w: Widget):
+class WidgetWrap(delegate_to_widget_mixin("_wrapped_widget"), typing.Generic[WrappedWidget]):
+    def __init__(self, w: WrappedWidget) -> None:
         """
         w -- widget to wrap, stored as self._w
 
@@ -776,14 +657,22 @@ class WidgetWrap(delegate_to_widget_mixin("_wrapped_widget"), Widget):
         of the wrapped widgets by behaving like a ContainerWidget or
         WidgetDecoration, or it may hide them from outside access.
         """
+        super().__init__()
+        if not isinstance(w, Widget):
+            obj_class_path = f"{w.__class__.__module__}.{w.__class__.__name__}"
+            warnings.warn(
+                f"{obj_class_path} is not subclass of Widget",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._wrapped_widget = w
 
     @property
-    def _w(self) -> Widget:
+    def _w(self) -> WrappedWidget:
         return self._wrapped_widget
 
     @_w.setter
-    def _w(self, new_widget: Widget) -> None:
+    def _w(self, new_widget: WrappedWidget) -> None:
         """
         Change the wrapped widget.  This is meant to be called
         only by subclasses.
@@ -803,7 +692,7 @@ class WidgetWrap(delegate_to_widget_mixin("_wrapped_widget"), Widget):
         self._wrapped_widget = new_widget
         self._invalidate()
 
-    def _set_w(self, w):
+    def _set_w(self, w: WrappedWidget) -> None:
         """
         Change the wrapped widget.  This is meant to be called
         only by subclasses.

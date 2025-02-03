@@ -3,33 +3,38 @@ from __future__ import annotations
 import typing
 
 from .columns import Columns
-from .constants import Align, Sizing
+from .constants import BOX_SYMBOLS, Align, WHSettings
 from .divider import Divider
 from .pile import Pile
 from .solid_fill import SolidFill
 from .text import Text
-from .widget import Widget, WidgetWrap
-from .widget_decoration import WidgetDecoration
+from .widget_decoration import WidgetDecoration, delegate_to_widget_mixin
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
+    from .widget import Widget
 
-class LineBox(WidgetDecoration, WidgetWrap):
+WrappedWidget = typing.TypeVar("WrappedWidget")
+
+
+class LineBox(WidgetDecoration[WrappedWidget], delegate_to_widget_mixin("_wrapped_widget")):
+    Symbols = BOX_SYMBOLS
+
     def __init__(
         self,
-        original_widget: Widget,
+        original_widget: WrappedWidget,
         title: str = "",
         title_align: Literal["left", "center", "right"] | Align = Align.CENTER,
         title_attr=None,
-        tlcorner: str = "┌",
-        tline: str = "─",
-        lline: str = "│",
-        trcorner: str = "┐",
-        blcorner: str = "└",
-        rline: str = "│",
-        bline: str = "─",
-        brcorner: str = "┘",
+        tlcorner: str = BOX_SYMBOLS.LIGHT.TOP_LEFT,
+        tline: str = BOX_SYMBOLS.LIGHT.HORIZONTAL,
+        lline: str = BOX_SYMBOLS.LIGHT.VERTICAL,
+        trcorner: str = BOX_SYMBOLS.LIGHT.TOP_RIGHT,
+        blcorner: str = BOX_SYMBOLS.LIGHT.BOTTOM_LEFT,
+        rline: str = BOX_SYMBOLS.LIGHT.VERTICAL,
+        bline: str = BOX_SYMBOLS.LIGHT.HORIZONTAL,
+        brcorner: str = BOX_SYMBOLS.LIGHT.BOTTOM_RIGHT,
     ) -> None:
         """
         Draw a line around original_widget.
@@ -52,22 +57,54 @@ class LineBox(WidgetDecoration, WidgetWrap):
             blcorner: bottom left corner
             brcorner: bottom right corner
 
-        If empty string is specified for one of the lines/corners, then no
-        character will be output there.  This allows for seamless use of
-        adjoining LineBoxes.
+        If empty string is specified for one of the lines/corners, then no character will be output there.
+        If no top/bottom/left/right lines - whole lines will be omitted.
+        This allows for seamless use of adjoining LineBoxes.
+
+        Class attribute `Symbols` can be used as source for standard lines:
+
+        >>> print(LineBox(Text("Some text")).render(()))
+        ┌─────────┐
+        │Some text│
+        └─────────┘
+        >>> print(
+        ...   LineBox(
+        ...     Text("Some text"),
+        ...     tlcorner=LineBox.Symbols.LIGHT.TOP_LEFT_ROUNDED,
+        ...     trcorner=LineBox.Symbols.LIGHT.TOP_RIGHT_ROUNDED,
+        ...     blcorner=LineBox.Symbols.LIGHT.BOTTOM_LEFT_ROUNDED,
+        ...     brcorner=LineBox.Symbols.LIGHT.BOTTOM_RIGHT_ROUNDED,
+        ...   ).render(())
+        ... )
+        ╭─────────╮
+        │Some text│
+        ╰─────────╯
+        >>> print(
+        ...   LineBox(
+        ...     Text("Some text"),
+        ...     tline=LineBox.Symbols.HEAVY.HORIZONTAL,
+        ...     bline=LineBox.Symbols.HEAVY.HORIZONTAL,
+        ...     lline=LineBox.Symbols.HEAVY.VERTICAL,
+        ...     rline=LineBox.Symbols.HEAVY.VERTICAL,
+        ...     tlcorner=LineBox.Symbols.HEAVY.TOP_LEFT,
+        ...     trcorner=LineBox.Symbols.HEAVY.TOP_RIGHT,
+        ...     blcorner=LineBox.Symbols.HEAVY.BOTTOM_LEFT,
+        ...     brcorner=LineBox.Symbols.HEAVY.BOTTOM_RIGHT,
+        ...   ).render(())
+        ... )
+        ┏━━━━━━━━━┓
+        ┃Some text┃
+        ┗━━━━━━━━━┛
+
+        To make Table constructions, some lineboxes need to be drawn without sides
+        and T or CROSS symbols used for corners of cells.
         """
 
-        if tline:
-            tline = Divider(tline)
-        if bline:
-            bline = Divider(bline)
-        if lline:
-            lline = SolidFill(lline)
-        if rline:
-            rline = SolidFill(rline)
+        w_lline = SolidFill(lline)
+        w_rline = SolidFill(rline)
 
-        tlcorner, trcorner = Text(tlcorner), Text(trcorner)
-        blcorner, brcorner = Text(blcorner), Text(brcorner)
+        w_tlcorner, w_tline, w_trcorner = Text(tlcorner), Divider(tline), Text(trcorner)
+        w_blcorner, w_bline, w_brcorner = Text(blcorner), Divider(bline), Text(brcorner)
 
         if not tline and title:
             raise ValueError("Cannot have a title when tline is empty string")
@@ -78,75 +115,80 @@ class LineBox(WidgetDecoration, WidgetWrap):
             self.title_widget = Text(self.format_title(title))
 
         if tline:
-            if title_align not in ("left", "center", "right"):
+            if title_align not in {Align.LEFT, Align.CENTER, Align.RIGHT}:
                 raise ValueError('title_align must be one of "left", "right", or "center"')
             if title_align == Align.LEFT:
-                tline_widgets = [("flow", self.title_widget), tline]
+                tline_widgets = [(WHSettings.PACK, self.title_widget), w_tline]
             else:
-                tline_widgets = [tline, (Sizing.FLOW, self.title_widget)]
-                if title_align == "center":
-                    tline_widgets.append(tline)
+                tline_widgets = [w_tline, (WHSettings.PACK, self.title_widget)]
+                if title_align == Align.CENTER:
+                    tline_widgets.append(w_tline)
+
             self.tline_widget = Columns(tline_widgets)
-            top = Columns([(Sizing.FIXED, 1, tlcorner), self.tline_widget, (Sizing.FIXED, 1, trcorner)])
+            top = Columns(
+                (
+                    (int(bool(tlcorner and lline)), w_tlcorner),
+                    self.tline_widget,
+                    (int(bool(trcorner and rline)), w_trcorner),
+                )
+            )
 
         else:
             self.tline_widget = None
             top = None
 
-        middle_widgets = []
-        if lline:
-            middle_widgets.append(("fixed", 1, lline))
-        else:
-            # Note: We need to define a fixed first widget (even if it's 0 width) so that the other
-            # widgets have something to anchor onto
-            middle_widgets.append(("fixed", 0, SolidFill("")))
-        middle_widgets.append(original_widget)
-        focus_col = len(middle_widgets) - 1
-        if rline:
-            middle_widgets.append((Sizing.FIXED, 1, rline))
-
-        middle = Columns(middle_widgets, box_columns=[0, 2], focus_column=focus_col)
+        # Note: We need to define a fixed first widget (even if it's 0 width) so that the other
+        # widgets have something to anchor onto
+        middle = Columns(
+            ((int(bool(lline)), w_lline), original_widget, (int(bool(rline)), w_rline)),
+            box_columns=[0, 2],
+            focus_column=original_widget,
+        )
 
         if bline:
-            bottom = Columns([(Sizing.FIXED, 1, blcorner), bline, (Sizing.FIXED, 1, brcorner)])
+            bottom = Columns(
+                (
+                    (int(bool(blcorner and lline)), w_blcorner),
+                    w_bline,
+                    (int(bool(brcorner and rline)), w_brcorner),
+                )
+            )
         else:
             bottom = None
 
         pile_widgets = []
         if top:
-            pile_widgets.append(("flow", top))
+            pile_widgets.append((WHSettings.PACK, top))
         pile_widgets.append(middle)
-        focus_pos = len(pile_widgets) - 1
         if bottom:
-            pile_widgets.append(("flow", bottom))
-        pile = Pile(pile_widgets, focus_item=focus_pos)
+            pile_widgets.append((WHSettings.PACK, bottom))
 
-        WidgetDecoration.__init__(self, original_widget)
-        WidgetWrap.__init__(self, pile)
+        self._wrapped_widget = Pile(pile_widgets, focus_item=middle)
+
+        super().__init__(original_widget)
+
+    @property
+    def _w(self) -> Pile:
+        return self._wrapped_widget
 
     def format_title(self, text: str) -> str:
-        if len(text) > 0:
+        if text:
             return f" {text} "
 
         return ""
 
-    def set_title(self, text):
-        if not self.title_widget:
+    def set_title(self, text: str) -> None:
+        if not self.tline_widget:
             raise ValueError("Cannot set title when tline is unset")
         self.title_widget.set_text(self.format_title(text))
         self.tline_widget._invalidate()
 
-    def pack(self, size=None, focus: bool = False) -> tuple[int, int]:
-        """
-        Return the number of screen columns and rows required for
-        this Linebox widget to be displayed without wrapping or
-        clipping, as a single element tuple.
+    @property
+    def focus(self) -> Widget | None:
+        """LineBox is partially container.
 
-        :param size: ``None`` for unlimited screen columns or (*maxcol*,) to
-                     specify a maximum column size
-        :type size: widget size
+        While focus position is a bit hacky
+        (formally it's not container and only position 0 available),
+        focus widget is always provided by original widget.
         """
-        size = list(self._original_widget.pack(size, focus))
-        size[0] += 2
-        size[1] += 2
-        return size
+        return self._original_widget.focus

@@ -27,6 +27,7 @@ PyGObject library is required.
 from __future__ import annotations
 
 import functools
+import logging
 import signal
 import typing
 
@@ -36,6 +37,7 @@ from .abstract_loop import EventLoop, ExitMainLoop
 
 if typing.TYPE_CHECKING:
     from collections.abc import Callable
+    from concurrent.futures import Executor, Future
     from types import FrameType
 
     from typing_extensions import Literal, ParamSpec
@@ -56,6 +58,8 @@ class GLibEventLoop(EventLoop):
     """
 
     def __init__(self) -> None:
+        super().__init__()
+        self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self._alarms: list[int] = []
         self._watch_files: dict[int, int] = {}
         self._idle_handle: int = 0
@@ -65,6 +69,28 @@ class GLibEventLoop(EventLoop):
         self._exc: BaseException | None = None
         self._enable_glib_idle()
         self._signal_handlers: dict[int, int] = {}
+
+    def run_in_executor(
+        self,
+        executor: Executor,
+        func: Callable[_Spec, _T],
+        *args: _Spec.args,
+        **kwargs: _Spec.kwargs,
+    ) -> Future[_T]:
+        """Run callable in executor.
+
+        :param executor: Executor to use for running the function
+        :type executor: concurrent.futures.Executor
+        :param func: function to call
+        :type func: Callable
+        :param args: positional arguments to function
+        :type args: object
+        :param kwargs: keyword arguments to function
+        :type kwargs: object
+        :return: future object for the function call outcome.
+        :rtype: concurrent.futures.Future
+        """
+        return executor.submit(func, *args, **kwargs)
 
     def alarm(
         self,

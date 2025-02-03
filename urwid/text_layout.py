@@ -1,5 +1,3 @@
-#!/usr/bin/python
-#
 # Urwid Text Layout classes
 #    Copyright (C) 2004-2011  Ian Ward
 #
@@ -22,23 +20,49 @@
 
 from __future__ import annotations
 
+import functools
 import typing
 
-from urwid.util import calc_text_pos, calc_trim_text, calc_width, is_wide_char, move_next_char, move_prev_char
+from urwid.str_util import calc_text_pos, calc_width, get_char_width, is_wide_char, move_next_char, move_prev_char
+from urwid.util import calc_trim_text, get_encoding
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
 
+    from urwid.widget import Align, WrapMode
+
+
+@functools.lru_cache(maxsize=4)
+def get_ellipsis_string(encoding: str) -> str:
+    """Get ellipsis character for given encoding."""
+    try:
+        return "…".encode(encoding).decode(encoding)
+    except UnicodeEncodeError:
+        return "..."
+
+
+@functools.lru_cache(maxsize=4)
+def _get_width(string) -> int:
+    """Get ellipsis character width for given encoding."""
+    return sum(get_char_width(char) for char in string)
+
+
 class TextLayout:
-    def supports_align_mode(self, align):
+    def supports_align_mode(self, align: Literal["left", "center", "right"] | Align) -> bool:
         """Return True if align is a supported align mode."""
         return True
 
-    def supports_wrap_mode(self, wrap):
+    def supports_wrap_mode(self, wrap: Literal["any", "space", "clip", "ellipsis"] | WrapMode) -> bool:
         """Return True if wrap is a supported wrap mode."""
         return True
 
-    def layout(self, text, width, align, wrap ):
+    def layout(
+        self,
+        text: str | bytes,
+        width: int,
+        align: Literal["left", "center", "right"] | Align,
+        wrap: Literal["any", "space", "clip", "ellipsis"] | WrapMode,
+    ) -> list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]]:
         """
         Return a layout structure for text.
 
@@ -70,50 +94,54 @@ class CanNotDisplayText(Exception):
 
 
 class StandardTextLayout(TextLayout):
-    def __init__(self):#, tab_stops=(), tab_stop_every=8):
+    def __init__(self) -> None:  # , tab_stops=(), tab_stop_every=8):
         pass
-        #"""
-        #tab_stops -- list of screen column indexes for tab stops
-        #tab_stop_every -- repeated interval for following tab stops
-        #"""
-        #assert tab_stop_every is None or type(tab_stop_every)==int
-        #if not tab_stops and tab_stop_every:
+        # """
+        # tab_stops -- list of screen column indexes for tab stops
+        # tab_stop_every -- repeated interval for following tab stops
+        # """
+        # assert tab_stop_every is None or type(tab_stop_every)==int
+        # if not tab_stops and tab_stop_every:
         #    self.tab_stops = (tab_stop_every,)
-        #self.tab_stops = tab_stops
-        #self.tab_stop_every = tab_stop_every
+        # self.tab_stops = tab_stops
+        # self.tab_stop_every = tab_stop_every
 
-    def supports_align_mode(self, align: str) -> bool:
+    def supports_align_mode(self, align: Literal["left", "center", "right"] | Align) -> bool:
         """Return True if align is 'left', 'center' or 'right'."""
-        return align in ('left', 'center', 'right')
+        return align in {"left", "center", "right"}
 
-    def supports_wrap_mode(self, wrap: str) -> bool:
+    def supports_wrap_mode(self, wrap: Literal["any", "space", "clip", "ellipsis"] | WrapMode) -> bool:
         """Return True if wrap is 'any', 'space', 'clip' or 'ellipsis'."""
-        return wrap in ('any', 'space', 'clip', 'ellipsis')
+        return wrap in {"any", "space", "clip", "ellipsis"}
 
     def layout(
         self,
-        text,
+        text: str | bytes,
         width: int,
-        align: Literal['left', 'center', 'right'],
-        wrap: Literal['any', 'space', 'clip', 'ellipsis'],
-    ):
+        align: Literal["left", "center", "right"] | Align,
+        wrap: Literal["any", "space", "clip", "ellipsis"] | WrapMode,
+    ) -> list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]]:
         """Return a layout structure for text."""
         try:
-            segs = self.calculate_text_segments( text, width, wrap )
-            return self.align_layout( text, width, segs, wrap, align )
+            segs = self.calculate_text_segments(text, width, wrap)
+            return self.align_layout(text, width, segs, wrap, align)
         except CanNotDisplayText:
             return [[]]
 
-    def pack(self, maxcol: int, layout) -> int:
-        """
-        Return a minimal maxcol value that would result in the same
-        number of lines for layout.  layout must be a layout structure
-        returned by self.layout().
+    def pack(
+        self,
+        maxcol: int,
+        layout: list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]],
+    ) -> int:
+        """Return a minimal maxcol value that would result in the same number of lines for layout.
+
+        layout must be a layout structure returned by self.layout().
         """
         maxwidth = 0
-        assert layout, f"huh? empty layout?: {layout!r}"
-        for l in layout:
-            lw = line_width(l)
+        if not layout:
+            raise ValueError(f"huh? empty layout?: {layout!r}")
+        for lines in layout:
+            lw = line_width(lines)
             if lw >= maxcol:
                 return maxcol
             maxwidth = max(maxwidth, lw)
@@ -121,170 +149,208 @@ class StandardTextLayout(TextLayout):
 
     def align_layout(
         self,
-        text,
+        text: str | bytes,
         width: int,
-        segs,
-        wrap: Literal['any', 'space', 'clip', 'ellipsis'],
-        align: Literal['left', 'center', 'right'],
-    ):
-        """Convert the layout segs to an aligned layout."""
+        segs: list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]],
+        wrap: Literal["any", "space", "clip", "ellipsis"] | WrapMode,
+        align: Literal["left", "center", "right"] | Align,
+    ) -> list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]]:
+        """Convert the layout segments to an aligned layout."""
         out = []
-        for l in segs:
-            sc = line_width(l)
-            if sc == width or align=='left':
-                out.append(l)
+        for lines in segs:
+            sc = line_width(lines)
+            if sc == width or align == "left":
+                out.append(lines)
                 continue
 
-            if align == 'right':
-                out.append([(width-sc, None)] + l)
+            if align == "right":
+                out.append([(width - sc, None), *lines])
                 continue
-            assert align == 'center'
-            pad_trim_left = (width-sc+1) // 2
-            out.append([(pad_trim_left, None)] + l if pad_trim_left else l)
+            if align != "center":
+                raise ValueError(align)
+            pad_trim_left = (width - sc + 1) // 2
+            out.append([(pad_trim_left, None), *lines] if pad_trim_left else lines)
         return out
+
+    def _calculate_trimmed_segments(
+        self,
+        text: str | bytes,
+        width: int,
+        wrap: Literal["any", "space", "clip", "ellipsis"] | WrapMode,
+    ) -> list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]]:
+        """Calculate text segments for cases of a text trimmed (wrap is clip or ellipsis)."""
+        segments = []
+
+        nl: str | bytes = "\n" if isinstance(text, str) else b"\n"
+        encoding = get_encoding()
+        ellipsis_string = get_ellipsis_string(encoding)
+        ellipsis_width = _get_width(ellipsis_string)
+        while width - 1 < ellipsis_width and ellipsis_string:
+            ellipsis_string = ellipsis_string[:-1]
+            ellipsis_width = _get_width(ellipsis_string)
+
+        ellipsis_char = ellipsis_string.encode(encoding)
+
+        idx = 0
+
+        while idx <= len(text):
+            nl_pos = text.find(nl, idx)
+            if nl_pos == -1:
+                nl_pos = len(text)
+            screen_columns = calc_width(text, idx, nl_pos)
+
+            # trim line to max width if needed, add ellipsis if trimmed
+            if wrap == "ellipsis" and screen_columns > width and ellipsis_width:
+                trimmed = True
+
+                start_off, end_off, pad_left, pad_right = calc_trim_text(text, idx, nl_pos, 0, width - ellipsis_width)
+                # pad_left should be 0, because the start_col parameter was 0 (no trimming on the left)
+                # similarly spos should not be changed from p
+                if pad_left != 0:
+                    raise ValueError(f"Invalid padding for start column==0: {pad_left!r}")
+                if start_off != idx:
+                    raise ValueError(f"Invalid start offset for  start column==0 and position={idx!r}: {start_off!r}")
+                screen_columns = width - 1 - pad_right
+
+            else:
+                trimmed = False
+                end_off = nl_pos
+                pad_right = 0
+
+            line = []
+            if idx != end_off:
+                line += [(screen_columns, idx, end_off)]
+            if trimmed:
+                line += [(ellipsis_width, end_off, ellipsis_char)]
+            line += [(pad_right, end_off)]
+            segments.append(line)
+            idx = nl_pos + 1
+        return segments
 
     def calculate_text_segments(
         self,
-        text,
+        text: str | bytes,
         width: int,
-        wrap: Literal['any', 'space', 'clip', 'ellipsis'],
-    ):
+        wrap: Literal["any", "space", "clip", "ellipsis"] | WrapMode,
+    ) -> list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]]:
         """
-        Calculate the segments of text to display given width screen
-        columns to display them.
+        Calculate the segments of text to display given width screen columns to display them.
 
         text - unicode text or byte string to display
         width - number of available screen columns
         wrap - wrapping mode used
 
-        Returns a layout structure without alignment applied.
+        Returns a layout structure without an alignment applied.
         """
+        if wrap in {"clip", "ellipsis"}:
+            return self._calculate_trimmed_segments(text, width, wrap)
+
         nl, nl_o, sp_o = "\n", "\n", " "
         if isinstance(text, bytes):
-            nl = nl.encode('iso8859-1')  # can only find bytes in python3 bytestrings
+            nl = b"\n"  # can only find bytes in python3 bytestrings
             nl_o = ord(nl_o)  # + an item of a bytestring is the ordinal value
             sp_o = ord(sp_o)
-        b = []
-        p = 0
-        if wrap in ('clip', 'ellipsis'):
-            # no wrapping to calculate, so it's easy.
-            while p <= len(text):
-                n_cr = text.find(nl, p)
-                if n_cr == -1:
-                    n_cr = len(text)
-                sc = calc_width(text, p, n_cr)
+        segments = []
+        idx = 0
 
-                # trim line to max width if needed, add ellipsis if trimmed
-                if wrap == 'ellipsis' and sc > width:
-                    trimmed = True
-                    spos, n_end, pad_left, pad_right = calc_trim_text(text, p, n_cr, 0, width-1)
-                    # pad_left should be 0, because the start_col parameter was 0 (no trimming on the left)
-                    # similarly spos should not be changed from p
-                    assert pad_left == 0
-                    assert spos == p
-                    sc = width - 1 - pad_right
-                else:
-                    trimmed = False
-                    n_end = n_cr
-                    pad_right = 0
+        while idx <= len(text):
+            # look for the next eligible line break
+            nl_pos = text.find(nl, idx)
+            if nl_pos == -1:
+                nl_pos = len(text)
 
-                l = []
-                if p!=n_end:
-                    l += [(sc, p, n_end)]
-                if trimmed:
-                    l += [(1, n_end, '…'.encode())]
-                l += [(pad_right,n_end)]
-                b.append(l)
-                p = n_cr+1
-            return b
-
-        while p <= len(text):
-            # look for next eligible line break
-            n_cr = text.find(nl, p)
-            if n_cr == -1:
-                n_cr = len(text)
-            sc = calc_width(text, p, n_cr)
-            if sc == 0:
+            screen_columns = calc_width(text, idx, nl_pos)
+            if screen_columns == 0:
                 # removed character hint
-                b.append([(0, n_cr)])
-                p = n_cr + 1
+                segments.append([(0, nl_pos)])
+                idx = nl_pos + 1
                 continue
-            if sc <= width:
+
+            if screen_columns <= width:
                 # this segment fits
-                b.append([(sc, p, n_cr), (0, n_cr)])
+                segments.append([(screen_columns, idx, nl_pos), (0, nl_pos)])
                 # removed character hint
 
-                p = n_cr + 1
+                idx = nl_pos + 1
                 continue
-            pos, sc = calc_text_pos( text, p, n_cr, width )
-            if pos == p:  # pathological width=1 double-byte case
+
+            pos, screen_columns = calc_text_pos(text, idx, nl_pos, width)
+            if pos == idx:  # pathological width=1 double-byte case
                 raise CanNotDisplayText("Wide character will not fit in 1-column width")
-            if wrap == 'any':
-                b.append([(sc, p, pos)])
-                p = pos
+
+            if wrap == "any":
+                segments.append([(screen_columns, idx, pos)])
+                idx = pos
                 continue
-            assert wrap == 'space'
+
+            if wrap != "space":
+                raise ValueError(wrap)
+
             if text[pos] == sp_o:
                 # perfect space wrap
-                b.append([(sc, p, pos), (0,pos)])
+                segments.append([(screen_columns, idx, pos), (0, pos)])
                 # removed character hint
 
-                p = pos + 1
+                idx = pos + 1
                 continue
+
             if is_wide_char(text, pos):
                 # perfect next wide
-                b.append([(sc, p, pos)])
-                p = pos
+                segments.append([(screen_columns, idx, pos)])
+                idx = pos
                 continue
+
             prev = pos
-            while prev > p:
-                prev = move_prev_char(text, p, prev)
+            while prev > idx:
+                prev = move_prev_char(text, idx, prev)
                 if text[prev] == sp_o:
-                    sc = calc_width(text, p, prev)
-                    l = [(0, prev)]
-                    if p != prev:
-                        l = [(sc, p, prev)] + l
-                    b.append(l)
-                    p = prev+1
+                    screen_columns = calc_width(text, idx, prev)
+                    line = [(0, prev)]
+                    if idx != prev:
+                        line = [(screen_columns, idx, prev), *line]
+                    segments.append(line)
+                    idx = prev + 1
                     break
+
                 if is_wide_char(text, prev):
                     # wrap after wide char
-                    next = move_next_char(text, prev, pos)
-                    sc = calc_width(text, p, next)
-                    b.append([(sc, p, next)])
-                    p = next
+                    next_char = move_next_char(text, prev, pos)
+                    screen_columns = calc_width(text, idx, next_char)
+                    segments.append([(screen_columns, idx, next_char)])
+                    idx = next_char
                     break
+
             else:
                 # unwrap previous line space if possible to
                 # fit more text (we're breaking a word anyway)
-                if b and (len(b[-1]) == 2 or (len(b[-1]) == 1 and len(b[-1][0]) == 2)):
-                    # look for removed space above
-                    if len(b[-1]) == 1:
-                        [(h_sc, h_off)] = b[-1]
+                if segments and (len(segments[-1]) == 2 or (len(segments[-1]) == 1 and len(segments[-1][0]) == 2)):
+                    # look for the removed space above
+                    if len(segments[-1]) == 1:
+                        [(h_sc, h_off)] = segments[-1]
                         p_sc = 0
-                        p_off = p_end = h_off
+                        p_off = _p_end = h_off
+
                     else:
-                        [(p_sc, p_off, p_end), (h_sc, h_off)] = b[-1]
+                        [(p_sc, p_off, _p_end), (h_sc, h_off)] = segments[-1]
+
                     if p_sc < width and h_sc == 0 and text[h_off] == sp_o:
-                        # combine with previous line
-                        del b[-1]
-                        p = p_off
-                        pos, sc = calc_text_pos(
-                            text, p, n_cr, width )
-                        b.append([(sc, p, pos)])
+                        # combine with the previous line
+                        del segments[-1]
+                        idx = p_off
+                        pos, screen_columns = calc_text_pos(text, idx, nl_pos, width)
+                        segments.append([(screen_columns, idx, pos)])
                         # check for trailing " " or "\n"
-                        p = pos
-                        if p < len(text) and (text[p] in (sp_o, nl_o)):
+                        idx = pos
+                        if idx < len(text) and (text[idx] in {sp_o, nl_o}):
                             # removed character hint
-                            b[-1].append((0, p))
-                            p += 1
+                            segments[-1].append((0, idx))
+                            idx += 1
                         continue
 
                 # force any char wrap
-                b.append([(sc, p, pos)])
-                p = pos
-        return b
-
+                segments.append([(screen_columns, idx, pos)])
+                idx = pos
+        return segments
 
 
 ######################################
@@ -294,35 +360,44 @@ default_layout = StandardTextLayout()
 
 
 class LayoutSegment:
-    def __init__(self, seg: tuple[int, int, bytes | int] | tuple[int, int | None]) -> None:
+    def __init__(self, seg: tuple[int, int, int | bytes] | tuple[int, int | None]) -> None:
         """Create object from line layout segment structure"""
 
-        assert isinstance(seg, tuple), repr(seg)
-        assert len(seg) in (2, 3), repr(seg)
+        if not isinstance(seg, tuple):
+            raise TypeError(seg)
+        if len(seg) not in {2, 3}:
+            raise ValueError(seg)
 
         self.sc, self.offs = seg[:2]
 
-        assert isinstance(self.sc, int), repr(self.sc)
+        if not isinstance(self.sc, int):
+            raise TypeError(self.sc)
 
         if len(seg) == 3:
-            assert isinstance(self.offs, int), repr(self.offs)
-            assert self.sc > 0, repr(seg)
+            if not isinstance(self.offs, int):
+                raise TypeError(self.offs)
+            if self.sc <= 0:
+                raise ValueError(seg)
             t = seg[2]
             if isinstance(t, bytes):
                 self.text: bytes | None = t
                 self.end = None
             else:
-                assert isinstance(t, int), repr(t)
+                if not isinstance(t, int):
+                    raise TypeError(t)
                 self.text = None
                 self.end = t
         else:
-            assert len(seg) == 2, repr(seg)
+            if len(seg) != 2:
+                raise ValueError(seg)
             if self.offs is not None:
-                assert self.sc >= 0, repr(seg)
-                assert isinstance(self.offs, int)
+                if self.sc < 0:
+                    raise ValueError(seg)
+                if not isinstance(self.offs, int):
+                    raise TypeError(self.offs)
             self.text = self.end = None
 
-    def subseg(self, text, start: int, end: int):
+    def subseg(self, text: str | bytes, start: int, end: int) -> list[tuple[int, int] | tuple[int, int, int | bytes]]:
         """
         Return a "sub-segment" list containing segment structures
         that make up a portion of this segment.
@@ -331,32 +406,30 @@ class LayoutSegment:
         need to be replaced with a space character at either edge
         so two or three segments will be returned.
         """
-        if start < 0:
-            start = 0
-        if end > self.sc:
-            end = self.sc
+        start = max(start, 0)
+        end = min(end, self.sc)
+
         if start >= end:
             return []  # completely gone
         if self.text:
             # use text stored in segment (self.text)
             spos, epos, pad_left, pad_right = calc_trim_text(self.text, 0, len(self.text), start, end)
-            return [(end-start, self.offs, b''.ljust(pad_left) + self.text[spos:epos] + b''.ljust(pad_right))]
-        elif self.end:
+            return [(end - start, self.offs, b"".ljust(pad_left) + self.text[spos:epos] + b"".ljust(pad_right))]
+        if self.end:
             # use text passed as parameter (text)
             spos, epos, pad_left, pad_right = calc_trim_text(text, self.offs, self.end, start, end)
-            l = []
+            lines = []
             if pad_left:
-                l.append((1, spos-1))
-            l.append((end-start-pad_left-pad_right, spos, epos))
+                lines.append((1, spos - 1))
+            lines.append((end - start - pad_left - pad_right, spos, epos))
             if pad_right:
-                l.append((1, epos))
-            return l
-        else:
-            # simple padding adjustment
-            return [(end-start ,self.offs)]
+                lines.append((1, epos))
+            return lines
+
+        return [(end - start, self.offs)]
 
 
-def line_width(segs):
+def line_width(segs: list[tuple[int, int, int | bytes] | tuple[int, int | None]]) -> int:
     """
     Return the screen column width of one line of a text layout structure.
 
@@ -372,34 +445,43 @@ def line_width(segs):
     return sc
 
 
-def shift_line(segs, amount: int):
+def shift_line(
+    segs: list[tuple[int, int, int | bytes] | tuple[int, int | None]],
+    amount: int,
+) -> list[tuple[int, int, int | bytes] | tuple[int, int | None]]:
     """
     Return a shifted line from a layout structure to the left or right.
     segs -- line of a layout structure
     amount -- screen columns to shift right (+ve) or left (-ve)
     """
-    assert isinstance(amount, int), repr(amount)
+    if not isinstance(amount, int):
+        raise TypeError(amount)
 
     if segs and len(segs[0]) == 2 and segs[0][1] is None:
         # existing shift
         amount += segs[0][0]
         if amount:
-            return [(amount,None)]+segs[1:]
+            return [(amount, None)] + segs[1:]
         return segs[1:]
 
     if amount:
-        return [(amount,None)]+segs
+        return [(amount, None), *segs]
     return segs
 
 
-def trim_line(segs, text, start: int, end: int):
+def trim_line(
+    segs: list[tuple[int, int, int | bytes] | tuple[int, int | None]],
+    text: str | bytes,
+    start: int,
+    end: int,
+) -> list[tuple[int, int, int | bytes] | tuple[int, int | None]]:
     """
     Return a trimmed line of a text layout structure.
     text -- text to which this layout structure applies
     start -- starting screen column
     end -- ending screen column
     """
-    l = []
+    result = []
     x = 0
     for seg in segs:
         sc = seg[0]
@@ -409,24 +491,28 @@ def trim_line(segs, text, start: int, end: int):
                 x += sc
                 continue
             s = LayoutSegment(seg)
-            if x+sc >= end:
+            if x + sc >= end:
                 # can all be done at once
-                return s.subseg( text, start, end-x )
-            l += s.subseg( text, start, sc )
+                return s.subseg(text, start, end - x)
+            result += s.subseg(text, start, sc)
             start = 0
             x += sc
             continue
         if x >= end:
             break
-        if x+sc > end:
+        if x + sc > end:
             s = LayoutSegment(seg)
-            l += s.subseg( text, 0, end-x )
+            result += s.subseg(text, 0, end - x)
             break
-        l.append( seg )
-    return l
+        result.append(seg)
+    return result
 
 
-def calc_line_pos(text, line_layout, pref_col: Literal['left', 'right'] | int):
+def calc_line_pos(
+    text: str | bytes,
+    line_layout,
+    pref_col: Literal["left", "right", Align.LEFT, Align.RIGHT] | int,
+):
     """
     Calculate the closest linear position to pref_col given a
     line layout structure.  Returns None if no position found.
@@ -435,23 +521,23 @@ def calc_line_pos(text, line_layout, pref_col: Literal['left', 'right'] | int):
     closest_pos = None
     current_sc = 0
 
-    if pref_col == 'left':
+    if pref_col == "left":
         for seg in line_layout:
             s = LayoutSegment(seg)
             if s.offs is not None:
                 return s.offs
-        return
-    elif pref_col == 'right':
+        return None
+    if pref_col == "right":
         for seg in line_layout:
             s = LayoutSegment(seg)
             if s.offs is not None:
                 closest_pos = s
         s = closest_pos
         if s is None:
-            return
+            return None
         if s.end is None:
             return s.offs
-        return calc_text_pos(text, s.offs, s.end, s.sc-1)[0]
+        return calc_text_pos(text, s.offs, s.end, s.sc - 1)[0]
 
     for seg in line_layout:
         s = LayoutSegment(seg)
@@ -460,11 +546,11 @@ def calc_line_pos(text, line_layout, pref_col: Literal['left', 'right'] | int):
                 if current_sc <= pref_col < current_sc + s.sc:
                     # exact match within this segment
                     return calc_text_pos(text, s.offs, s.end, pref_col - current_sc)[0]
-                elif current_sc <= pref_col:
+                if current_sc <= pref_col:
                     closest_sc = current_sc + s.sc - 1
                     closest_pos = s
 
-            if closest_sc is None or (abs(pref_col-current_sc) < abs(pref_col-closest_sc)):
+            if closest_sc is None or (abs(pref_col - current_sc) < abs(pref_col - closest_sc)):
                 # this screen column is closer
                 closest_sc = current_sc
                 closest_pos = s.offs
@@ -478,10 +564,15 @@ def calc_line_pos(text, line_layout, pref_col: Literal['left', 'right'] | int):
 
     # return the last positions in the segment "closest_pos"
     s = closest_pos
-    return calc_text_pos( text, s.offs, s.end, s.sc-1)[0]
+    return calc_text_pos(text, s.offs, s.end, s.sc - 1)[0]
 
 
-def calc_pos(text, layout, pref_col: Literal['left', 'right'] | int, row: int) -> int:
+def calc_pos(
+    text: str | bytes,
+    layout: list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]],
+    pref_col: Literal["left", "right", Align.LEFT, Align.RIGHT] | int,
+    row: int,
+) -> int:
     """
     Calculate the closest linear position to pref_col and row given a
     layout structure.
@@ -490,27 +581,31 @@ def calc_pos(text, layout, pref_col: Literal['left', 'right'] | int, row: int) -
     if row < 0 or row >= len(layout):
         raise ValueError("calculate_pos: out of layout row range")
 
-    pos = calc_line_pos(text, layout[row], pref_col)
-    if pos is not None:
+    if (pos := calc_line_pos(text, layout[row], pref_col)) is not None:
         return pos
 
-    rows_above = list(range(row-1, -1, -1))
-    rows_below = list(range(row+1, len(layout)))
+    rows_above = list(range(row - 1, -1, -1))
+    rows_below = list(range(row + 1, len(layout)))
     while rows_above and rows_below:
         if rows_above:
             r = rows_above.pop(0)
-            pos = calc_line_pos(text, layout[r], pref_col)
-            if pos is not None:
+            if (pos := calc_line_pos(text, layout[r], pref_col)) is not None:
                 return pos
+
         if rows_below:
             r = rows_below.pop(0)
-            pos = calc_line_pos(text, layout[r], pref_col)
-            if pos is not None:
+            if (pos := calc_line_pos(text, layout[r], pref_col)) is not None:
                 return pos
+
     return 0
 
 
-def calc_coords(text, layout, pos, clamp: int = 1):
+def calc_coords(
+    text: str | bytes,
+    layout: list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]],
+    pos: int,
+    clamp: int = 1,
+) -> tuple[int, int]:
     """
     Calculate the coordinates closest to position pos in text with layout.
 
@@ -519,7 +614,7 @@ def calc_coords(text, layout, pos, clamp: int = 1):
     pos -- integer position into text
     clamp -- ignored right now
     """
-    closest = None
+    closest: tuple[int, tuple[int, int]] | None = None
     y = 0
     for line_layout in layout:
         x = 0
@@ -534,9 +629,9 @@ def calc_coords(text, layout, pos, clamp: int = 1):
                 x += calc_width(text, s.offs, pos)
                 return x, y
             distance = abs(s.offs - pos)
-            if s.end is not None and s.end<pos:
-                distance = pos - (s.end-1)
-            if closest is None or distance < closest[0]:
+            if s.end is not None and s.end < pos:
+                distance = pos - (s.end - 1)
+            if closest is None or distance < closest[0]:  # pylint: disable=unsubscriptable-object
                 closest = distance, (x, y)
             x += s.sc
         y += 1

@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
+import sys
 import typing
 
 from .abstract_loop import EventLoop, ExitMainLoop
 
 if typing.TYPE_CHECKING:
     from collections.abc import Callable
+    from concurrent.futures import Executor
 
     from typing_extensions import ParamSpec
 
@@ -38,11 +41,17 @@ if typing.TYPE_CHECKING:
     _T = typing.TypeVar("_T")
 
 __all__ = ("AsyncioEventLoop",)
+IS_WINDOWS = sys.platform == "win32"
 
 
 class AsyncioEventLoop(EventLoop):
     """
     Event loop based on the standard library ``asyncio`` module.
+
+    .. warning::
+        Under Windows, AsyncioEventLoop globally enforces WindowsSelectorEventLoopPolicy
+        as a side-effect of creating a class instance.
+        Original event loop policy is restored in destructor method.
 
     .. note::
         If you make any changes to the urwid state outside of it
@@ -50,16 +59,27 @@ class AsyncioEventLoop(EventLoop):
         running in background), and wish the screen to be
         redrawn, you must call :meth:`MainLoop.draw_screen` method of the
         main loop manually.
-        A good way to do this::
+
+        A good way to do this:
             asyncio.get_event_loop().call_soon(main_loop.draw_screen)
     """
 
-    _we_started_event_loop = False
-
     def __init__(self, *, loop: asyncio.AbstractEventLoop | None = None, **kwargs) -> None:
+        super().__init__()
+        self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         if loop:
             self._loop: asyncio.AbstractEventLoop = loop
+            self._event_loop_policy_altered: bool = False
+            self._original_event_loop_policy: asyncio.AbstractEventLoopPolicy | None = None
         else:
+            self._original_event_loop_policy = asyncio.get_event_loop_policy()
+            if IS_WINDOWS and not isinstance(self._original_event_loop_policy, asyncio.WindowsSelectorEventLoopPolicy):
+                self.logger.debug("Set WindowsSelectorEventLoopPolicy as asyncio event loop policy")
+                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+                self._event_loop_policy_altered = True
+            else:
+                self._event_loop_policy_altered = False
+
             self._loop = asyncio.get_event_loop()
 
         self._exc: BaseException | None = None
@@ -67,6 +87,10 @@ class AsyncioEventLoop(EventLoop):
         self._idle_asyncio_handle: asyncio.TimerHandle | None = None
         self._idle_handle: int = 0
         self._idle_callbacks: dict[int, Callable[[], typing.Any]] = {}
+
+    def __del__(self) -> None:
+        if self._event_loop_policy_altered:
+            asyncio.set_event_loop_policy(self._original_event_loop_policy)  # Restore default event loop policy
 
     def _also_call_idle(self, callback: Callable[_Spec, _T]) -> Callable[_Spec, _T]:
         """
@@ -91,6 +115,28 @@ class AsyncioEventLoop(EventLoop):
         finally:
             self._idle_asyncio_handle = None
 
+    def run_in_executor(
+        self,
+        executor: Executor | None,
+        func: Callable[_Spec, _T],
+        *args: _Spec.args,
+        **kwargs: _Spec.kwargs,
+    ) -> asyncio.Future[_T]:
+        """Run callable in executor.
+
+        :param executor: Executor to use for running the function. Default asyncio executor is used if None.
+        :type executor: concurrent.futures.Executor | None
+        :param func: function to call
+        :type func: Callable
+        :param args: arguments to function (positional only)
+        :type args: object
+        :param kwargs: keyword arguments to function (keyword only)
+        :type kwargs: object
+        :return: future object for the function call outcome.
+        :rtype: asyncio.Future
+        """
+        return self._loop.run_in_executor(executor, functools.partial(func, *args, **kwargs))
+
     def alarm(self, seconds: float, callback: Callable[[], typing.Any]) -> asyncio.TimerHandle:
         """
         Call callback() a given time from now.  No parameters are
@@ -109,8 +155,7 @@ class AsyncioEventLoop(EventLoop):
 
         Returns True if the alarm exists, False otherwise
         """
-        cancelled = handle.cancelled() if getattr(handle, "cancelled", None) else handle._cancelled
-        existed = not cancelled
+        existed = not handle.cancelled()
         handle.cancel()
         return existed
 
@@ -160,8 +205,7 @@ class AsyncioEventLoop(EventLoop):
         return True
 
     def _exception_handler(self, loop: asyncio.AbstractEventLoop, context):
-        exc = context.get("exception")
-        if exc:
+        if exc := context.get("exception"):
             loop.stop()
 
             if self._idle_asyncio_handle:
@@ -177,9 +221,10 @@ class AsyncioEventLoop(EventLoop):
             loop.default_exception_handler(context)
 
     def run(self) -> None:
-        """
-        Start the event loop.  Exit the loop when any callback raises
-        an exception.  If ExitMainLoop is raised, exit cleanly.
+        """Start the event loop.
+
+        Exit the loop when any callback raises an exception.
+        If ExitMainLoop is raised, exit cleanly.
         """
         self._loop.set_exception_handler(self._exception_handler)
         self._loop.run_forever()
