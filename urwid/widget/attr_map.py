@@ -1,25 +1,33 @@
 from __future__ import annotations
 
+import typing
 from collections.abc import Hashable, Mapping
 
 from urwid.canvas import CompositeCanvas
 
-from .widget import Widget, WidgetError, delegate_to_widget_mixin
+from .widget import WidgetError, delegate_to_widget_mixin
 from .widget_decoration import WidgetDecoration
+
+WrappedWidget = typing.TypeVar("WrappedWidget")
 
 
 class AttrMapError(WidgetError):
     pass
 
 
-class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration):
+class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration[WrappedWidget]):
     """
     AttrMap is a decoration that maps one set of attributes to another.
     This object will pass all function calls and variable references to the
     wrapped widget.
     """
 
-    def __init__(self, w: Widget, attr_map, focus_map=None) -> None:
+    def __init__(
+        self,
+        w: WrappedWidget,
+        attr_map: Hashable | Mapping[Hashable | None, Hashable] | None,
+        focus_map: Hashable | Mapping[Hashable | None, Hashable] | None = None,
+    ) -> None:
         """
         :param w: widget to wrap (stored as self.original_widget)
         :type w: widget
@@ -48,7 +56,7 @@ class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration):
         [('fgreet', None, ...'hi   ')]
         >>> am2 = AttrMap(Text(('word', u"hi")), {'word':'greeting', None:'bg'})
         >>> am2
-        <AttrMap flow widget <Text flow widget 'hi'> attr_map={'word': 'greeting', None: 'bg'}>
+        <AttrMap fixed/flow widget <Text fixed/flow widget 'hi'> attr_map={'word': 'greeting', None: 'bg'}>
         >>> next(am2.render(size).content())
         [('greeting', None, ...'hi'), ('bg', None, ...'   ')]
         """
@@ -66,9 +74,9 @@ class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration):
         else:
             self.focus_map = {None: focus_map}
 
-    def _repr_attrs(self):
+    def _repr_attrs(self) -> dict[str, typing.Any]:
         # only include the focus_attr when it takes effect (not None)
-        d = dict(super()._repr_attrs(), attr_map=self._attr_map)
+        d = {**super()._repr_attrs(), "attr_map": self._attr_map}
         if self._focus_map is not None:
             d["focus_map"] = self._focus_map
         return d
@@ -78,7 +86,7 @@ class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration):
         # FIXME: a dictionary that detects modifications would be better
         return dict(self._attr_map)
 
-    def set_attr_map(self, attr_map: dict[Hashable | None, Hashable]) -> None:
+    def set_attr_map(self, attr_map: dict[Hashable | None, Hashable] | None) -> None:
         """
         Set the attribute mapping dictionary {from_attr: to_attr, ...}
 
@@ -89,7 +97,7 @@ class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration):
         >>> w = AttrMap(Text(u"hi"), None)
         >>> w.set_attr_map({'a':'b'})
         >>> w
-        <AttrMap flow widget <Text flow widget 'hi'> attr_map={'a': 'b'}>
+        <AttrMap fixed/flow widget <Text fixed/flow widget 'hi'> attr_map={'a': 'b'}>
         """
         for from_attr, to_attr in attr_map.items():
             if not isinstance(from_attr, Hashable) or not isinstance(to_attr, Hashable):
@@ -109,7 +117,7 @@ class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration):
             return dict(self._focus_map)
         return None
 
-    def set_focus_map(self, focus_map: dict[Hashable | None, Hashable]) -> None:
+    def set_focus_map(self, focus_map: dict[Hashable | None, Hashable] | None) -> None:
         """
         Set the focus attribute mapping dictionary
         {from_attr: to_attr, ...}
@@ -124,10 +132,10 @@ class AttrMap(delegate_to_widget_mixin("_original_widget"), WidgetDecoration):
         >>> w = AttrMap(Text(u"hi"), {})
         >>> w.set_focus_map({'a':'b'})
         >>> w
-        <AttrMap flow widget <Text flow widget 'hi'> attr_map={} focus_map={'a': 'b'}>
+        <AttrMap fixed/flow widget <Text fixed/flow widget 'hi'> attr_map={} focus_map={'a': 'b'}>
         >>> w.set_focus_map(None)
         >>> w
-        <AttrMap flow widget <Text flow widget 'hi'> attr_map={}>
+        <AttrMap fixed/flow widget <Text fixed/flow widget 'hi'> attr_map={}>
         """
         if focus_map is not None:
             for from_attr, to_attr in focus_map.items():

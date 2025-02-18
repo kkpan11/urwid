@@ -24,8 +24,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import heapq
+import logging
 import os
 import time
 import typing
@@ -36,12 +38,15 @@ import zmq
 from .abstract_loop import EventLoop, ExitMainLoop
 
 if typing.TYPE_CHECKING:
+    import io
     from collections.abc import Callable
+    from concurrent.futures import Executor, Future
+
+    from typing_extensions import ParamSpec
 
     ZMQAlarmHandle = typing.TypeVar("ZMQAlarmHandle")
-    ZMQQueueHandle = typing.TypeVar("ZMQQueueHandle")
-    ZMQFileHandle = typing.TypeVar("ZMQFileHandle")
-    ZMQIdleHandle = typing.TypeVar("ZMQIdleHandle")
+    _T = typing.TypeVar("_T")
+    _Spec = ParamSpec("_Spec")
 
 
 class ZMQEventLoop(EventLoop):
@@ -57,13 +62,37 @@ class ZMQEventLoop(EventLoop):
 
     _alarm_break = count()
 
-    def __init__(self):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         self._did_something = True
-        self._alarms = []
+        self._alarms: list[tuple[float, int, Callable[[], typing.Any]]] = []
         self._poller = zmq.Poller()
-        self._queue_callbacks = {}
+        self._queue_callbacks: dict[int, Callable[[], typing.Any]] = {}
         self._idle_handle = 0
-        self._idle_callbacks = {}
+        self._idle_callbacks: dict[int, Callable[[], typing.Any]] = {}
+
+    def run_in_executor(
+        self,
+        executor: Executor,
+        func: Callable[_Spec, _T],
+        *args: _Spec.args,
+        **kwargs: _Spec.kwargs,
+    ) -> Future[_T]:
+        """Run callable in executor.
+
+        :param executor: Executor to use for running the function
+        :type executor: concurrent.futures.Executor
+        :param func: function to call
+        :type func: Callable
+        :param args: positional arguments to function
+        :type args: object
+        :param kwargs: keyword arguments to function
+        :type kwargs: object
+        :return: future object for the function call outcome.
+        :rtype: concurrent.futures.Future
+        """
+        return executor.submit(func, *args, **kwargs)
 
     def alarm(self, seconds: float, callback: Callable[[], typing.Any]) -> ZMQAlarmHandle:
         """
@@ -99,7 +128,7 @@ class ZMQEventLoop(EventLoop):
         queue: zmq.Socket,
         callback: Callable[[], typing.Any],
         flags: int = zmq.POLLIN,
-    ) -> ZMQQueueHandle:
+    ) -> zmq.Socket:
         """
         Call *callback* when zmq *queue* has something to read (when *flags* is
         set to ``POLLIN``, the default) or is available to write (when *flags*
@@ -123,10 +152,10 @@ class ZMQEventLoop(EventLoop):
 
     def watch_file(
         self,
-        fd: int,
+        fd: int | io.TextIOWrapper,
         callback: Callable[[], typing.Any],
         flags: int = zmq.POLLIN,
-    ) -> ZMQFileHandle:
+    ) -> io.TextIOWrapper:
         """
         Call *callback* when *fd* has some data to read. No parameters are
         passed to the callback. The *flags* are as for :meth:`watch_queue`.
@@ -147,7 +176,7 @@ class ZMQEventLoop(EventLoop):
         self._queue_callbacks[fd.fileno()] = callback
         return fd
 
-    def remove_watch_queue(self, handle: ZMQQueueHandle) -> bool:
+    def remove_watch_queue(self, handle: zmq.Socket) -> bool:
         """
         Remove a queue from background polling. Returns ``True`` if the queue
         was being monitored, ``False`` otherwise.
@@ -163,7 +192,7 @@ class ZMQEventLoop(EventLoop):
 
         return True
 
-    def remove_watch_file(self, handle: ZMQFileHandle) -> bool:
+    def remove_watch_file(self, handle: io.TextIOWrapper) -> bool:
         """
         Remove a file from background polling. Returns ``True`` if the file was
         being monitored, ``False`` otherwise.
@@ -179,7 +208,7 @@ class ZMQEventLoop(EventLoop):
 
         return True
 
-    def enter_idle(self, callback: Callable[[], typing.Any]) -> ZMQIdleHandle:
+    def enter_idle(self, callback: Callable[[], typing.Any]) -> int:
         """
         Add a *callback* to be executed when the event loop detects it is idle.
         Returns a handle that may be passed to :meth:`remove_enter_idle`.
@@ -188,7 +217,7 @@ class ZMQEventLoop(EventLoop):
         self._idle_callbacks[self._idle_handle] = callback
         return self._idle_handle
 
-    def remove_enter_idle(self, handle: ZMQIdleHandle) -> bool:
+    def remove_enter_idle(self, handle: int) -> bool:
         """
         Remove an idle callback. Returns ``True`` if *handle* was removed,
         ``False`` otherwise.
@@ -209,30 +238,29 @@ class ZMQEventLoop(EventLoop):
         Start the event loop. Exit the loop when any callback raises an
         exception. If :exc:`ExitMainLoop` is raised, exit cleanly.
         """
-        try:
+        with contextlib.suppress(ExitMainLoop):
             while True:
                 try:
                     self._loop()
                 except zmq.error.ZMQError as exc:  # noqa: PERF203
                     if exc.errno != errno.EINTR:
                         raise
-        except ExitMainLoop:
-            pass
 
     def _loop(self) -> None:
         """
         A single iteration of the event loop.
         """
+        state = "wait"  # default state not expecting any action
         if self._alarms or self._did_something:
+            timeout = 0
             if self._alarms:
                 state = "alarm"
-                timeout = max(0, self._alarms[0][0] - time.time())
+                timeout = max(0.0, self._alarms[0][0] - time.time())
             if self._did_something and (not self._alarms or (self._alarms and timeout > 0)):
                 state = "idle"
                 timeout = 0
             ready = dict(self._poller.poll(timeout * 1000))
         else:
-            state = "wait"
             ready = dict(self._poller.poll())
 
         if not ready:
@@ -240,7 +268,7 @@ class ZMQEventLoop(EventLoop):
                 self._entering_idle()
                 self._did_something = False
             elif state == "alarm":
-                due, tie_break, callback = heapq.heappop(self._alarms)
+                _due, _tie_break, callback = heapq.heappop(self._alarms)
                 callback()
                 self._did_something = True
 

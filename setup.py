@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-#
 # Urwid setup.py exports the useful bits
 #    Copyright (C) 2004-2014  Ian Ward
 #
@@ -21,25 +19,15 @@
 
 from __future__ import annotations
 
-from setuptools import Extension, setup
+from setuptools import setup
 
-
-setup_d = {
-    'name': "urwid",
-    'ext_modules': [Extension('urwid.str_util', sources=['source/str_util.c'])],
-    'url': "https://urwid.org/",
-    'test_suite': 'urwid.tests',
-}
-
-if __name__ == "__main__":
-    try:
-        setup(**setup_d)
-    except (OSError, SystemExit) as e:
-        import sys
-        if "test" in sys.argv:
-            raise
-        import traceback
-        traceback.print_exc()
-        print("Couldn't build the extension module, trying without it...")
-        del setup_d["ext_modules"]
-        setup(**setup_d)
+setup(
+    name="urwid",
+    url="https://urwid.org/",
+    python_requires=">3.7",
+    setup_requires=[
+        "setuptools >= 61.0.0",
+        "setuptools_scm[toml]>=7.0",
+        "wheel",
+    ],
+)

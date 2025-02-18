@@ -1,9 +1,5 @@
 #!/usr/bin/env python
-"""Demo of using urwid with Python 3.4's asyncio.
-
-This code works on older Python 3.x if you install `asyncio` from PyPI, and
-even Python 2 if you install `trollius`!
-"""
+"""Demo of using urwid with Python asyncio."""
 
 from __future__ import annotations
 
@@ -14,7 +10,7 @@ import weakref
 from datetime import datetime
 
 import urwid
-from urwid.raw_display import Screen
+from urwid.display.raw import Screen
 
 logging.basicConfig()
 
@@ -24,10 +20,11 @@ loop = asyncio.get_event_loop()
 # -----------------------------------------------------------------------------
 # General-purpose setup code
 
+
 def build_widgets():
-    input1 = urwid.Edit('What is your name? ')
-    input2 = urwid.Edit('What is your quest? ')
-    input3 = urwid.Edit('What is the capital of Assyria? ')
+    input1 = urwid.Edit("What is your name? ")
+    input2 = urwid.Edit("What is your quest? ")
+    input3 = urwid.Edit("What is the capital of Assyria? ")
     inputs = [input1, input2, input3]
 
     def update_clock(widget_ref):
@@ -41,19 +38,20 @@ def build_widgets():
         # Schedule us to update the clock again in one second
         loop.call_later(1, update_clock, widget_ref)
 
-    clock = urwid.Text('')
+    clock = urwid.Text("")
     update_clock(weakref.ref(clock))
 
-    return urwid.Filler(urwid.Pile([clock] + inputs), 'top')
+    return urwid.Filler(urwid.Pile([clock, *inputs]), urwid.TOP)
 
 
 def unhandled(key):
-    if key == 'ctrl c':
+    if key == "ctrl c":
         raise urwid.ExitMainLoop
 
 
 # -----------------------------------------------------------------------------
 # Demo 1
+
 
 def demo1():
     """Plain old urwid app.  Just happens to be run atop asyncio as the event
@@ -75,6 +73,7 @@ def demo1():
 # -----------------------------------------------------------------------------
 # Demo 2
 
+
 class AsyncScreen(Screen):
     """An urwid screen that speaks to an asyncio stream, rather than polling
     file descriptors.
@@ -82,6 +81,7 @@ class AsyncScreen(Screen):
     This is fairly limited; it can't, for example, determine the size of the
     remote screen.  Fixing that depends on the nature of the stream.
     """
+
     def __init__(self, reader, writer, encoding="utf-8"):
         self.reader = reader
         self.writer = writer
@@ -112,8 +112,7 @@ class AsyncScreen(Screen):
                 pass
             else:
                 try:
-                    self.parse_input(
-                        event_loop, callback, bytearray(fut.result()))
+                    self.parse_input(event_loop, callback, bytearray(fut.result()))
                 except urwid.ExitMainLoop:
                     # This will immediately close the transport and thus the
                     # connection, which in turn calls connection_lost, which
@@ -122,8 +121,7 @@ class AsyncScreen(Screen):
 
             # create_task() schedules a coroutine without using `yield from` or
             # `await`, which are syntax errors in Pythons before 3.5
-            self._pending_task = event_loop._loop.create_task(
-                self.reader.read(1024))
+            self._pending_task = event_loop._loop.create_task(self.reader.read(1024))
             self._pending_task.add_done_callback(pump_reader)
 
         pump_reader()
@@ -179,15 +177,15 @@ def demo2():
     loop.run_forever()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     if len(sys.argv) == 2:
         which = sys.argv[1]
     else:
         which = None
 
-    if which == '1':
+    if which == "1":
         demo1()
-    elif which == '2':
+    elif which == "2":
         demo2()
     else:
         print("Please run me with an argument of either 1 or 2.")

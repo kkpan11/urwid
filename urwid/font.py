@@ -1,5 +1,3 @@
-#!/usr/bin/python
-#
 # Urwid BigText fonts
 #    Copyright (C) 2004-2006  Ian Ward
 #
@@ -27,7 +25,7 @@ import warnings
 from pprint import pformat
 
 from urwid.canvas import CanvasError, TextCanvas
-from urwid.escape import SAFE_ASCII_DEC_SPECIAL_RE
+from urwid.display.escape import SAFE_ASCII_DEC_SPECIAL_RE
 from urwid.util import apply_target_encoding, str_util
 
 if typing.TYPE_CHECKING:
@@ -62,7 +60,7 @@ def separate_glyphs(gdata: str, height: int) -> tuple[dict[str, tuple[int, list[
             character = key_line[key_index]
 
         if key_index < len(key_line) and key_line[key_index] == character:
-            end_col += str_util.get_width(ord(character))
+            end_col += str_util.get_char_width(character)
             key_index += 1
             continue
 
@@ -78,7 +76,7 @@ def separate_glyphs(gdata: str, height: int) -> tuple[dict[str, tuple[int, list[
                 if j >= len(line):
                     fill = end_col - start_col - y
                     break
-                y += str_util.get_width(ord(line[j]))
+                y += str_util.get_char_width(line[j])
                 j += 1
             if y + fill != end_col - start_col:
                 raise ValueError(repr((y, fill, end_col)))
@@ -121,28 +119,30 @@ class FontRegistry(type):
 
     __registered: typing.ClassVar[dict[str, FontRegistry]] = {}
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(cls) -> Iterator[str]:
         """Iterate over registered font names."""
-        return iter(self.__registered)
+        return iter(cls.__registered)
 
-    def __getitem__(self, item: str) -> FontRegistry | None:
+    def __getitem__(cls, item: str) -> FontRegistry | None:
         """Get font by name if registered."""
-        return self.__registered.get(item)
+        return cls.__registered.get(item)
 
-    def __class_getitem__(cls, item: str) -> FontRegistry | None:
+    def __class_getitem__(mcs, item: str) -> FontRegistry | None:
         """Get font by name if registered.
 
         This method is needed to get access to font from registry class.
+        >>> from urwid.util import set_temporary_encoding
         >>> repr(FontRegistry["a"])
         'None'
         >>> font = FontRegistry["Thin 3x3"]()
         >>> font.height
         3
-        >>> canvas: TextCanvas = font.render("+")
-        >>> b'\\n'.join(canvas.text).decode('utf-8') == "  \\n ┼\\n  "
-        True
+        >>> with set_temporary_encoding("utf-8"):
+        ...     canvas: TextCanvas = font.render("+")
+        >>> b'\\n'.join(canvas.text).decode('utf-8')
+        '  \\n ┼\\n  '
         """
-        return cls.__registered.get(item)
+        return mcs.__registered.get(item)
 
     @property
     def registered(cls) -> Sequence[str]:
@@ -154,19 +154,19 @@ class FontRegistry(type):
         """List of (font name, font class) tuples."""
         return list(mcs.__registered.items())
 
-    def __new__(  # noqa: PYI034  # new can not return Self
-        cls: type[FontRegistry],
+    def __new__(
+        mcs: type[FontRegistry],
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, typing.Any],
         **kwds: typing.Any,
     ) -> FontRegistry:
         font_name: str = namespace.setdefault("name", kwds.get("font_name", ""))
-        font_class = super().__new__(cls, name, bases, namespace)
+        font_class = super().__new__(mcs, name, bases, namespace)
         if font_name:
-            if font_name not in cls.__registered:
-                cls.__registered[font_name] = font_class
-            if cls.__registered[font_name] != font_class:
+            if font_name not in mcs.__registered:
+                mcs.__registered[font_name] = font_class
+            if mcs.__registered[font_name] != font_class:
                 warnings.warn(
                     f"{font_name!r} is already registered, please override explicit if required or change name",
                     FontRegistryWarning,
@@ -190,11 +190,11 @@ get_all_fonts = FontRegistry.as_list
 class Font(metaclass=FontRegistry):
     """Font base class."""
 
-    __slots__ = ("char", "canvas", "utf8_required")
+    __slots__ = ("canvas", "char", "utf8_required")
 
-    height: int
-    data: Sequence[str]
-    name: str
+    height: int  # pylint: disable=declare-non-slot
+    data: Sequence[str]  # pylint: disable=declare-non-slot
+    name: str  # pylint: disable=declare-non-slot
 
     def __init__(self) -> None:
         if not self.height:
@@ -205,9 +205,12 @@ class Font(metaclass=FontRegistry):
         self.char: dict[str, tuple[int, list[str]]] = {}
         self.canvas: dict[str, TextCanvas] = {}
         self.utf8_required = False
-        data: list[str] = [self._to_text(block) for block in self.data]
-        for gdata in data:
-            self.add_glyphs(gdata)
+        if isinstance(self.data, str):
+            self.add_glyphs(self.data)
+
+        else:
+            for gdata in self.data:
+                self.add_glyphs(gdata)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"
@@ -218,22 +221,19 @@ class Font(metaclass=FontRegistry):
 
     @staticmethod
     def _to_text(
-        obj: str | bytes,
+        obj: str,
         encoding: str = "utf-8",
         errors: Literal["strict", "ignore", "replace"] = "strict",
     ) -> str:
+        warnings.warn(
+            "_to_text is deprecated: only text fonts are supported",
+            DeprecationWarning,
+            stacklevel=3,
+        )
         if isinstance(obj, str):
             return obj
 
-        if isinstance(obj, bytes):
-            warnings.warn(
-                "Bytes based fonts are deprecated, please switch to the text one",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-            return obj.decode(encoding, errors)
-
-        raise TypeError(f"{obj!r} is not str|bytes")
+        raise TypeError(f"{obj!r} is not str")
 
     def add_glyphs(self, gdata: str) -> None:
         d, utf8_required = separate_glyphs(gdata, self.height)
@@ -685,6 +685,6 @@ if __name__ == "__main__":
         if font_chars == all_ascii:
             print("Full ASCII")
         elif font_chars & all_ascii == all_ascii:
-            print(f"Full ASCII + {''.join(font_chars^all_ascii)!r}")
+            print(f"Full ASCII + {''.join(font_chars ^ all_ascii)!r}")
         else:
             print(f"Characters: {chars!r}")

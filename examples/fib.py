@@ -29,7 +29,12 @@ Features:
 
 from __future__ import annotations
 
+import typing
+
 import urwid
+
+if typing.TYPE_CHECKING:
+    from typing_extensions import Literal
 
 
 class FibonacciWalker(urwid.ListWalker):
@@ -37,54 +42,67 @@ class FibonacciWalker(urwid.ListWalker):
 
     positions returned are (value at position-1, value at position) tuples.
     """
-    def __init__(self):
-        self.focus = (0,1)
+
+    def __init__(self) -> None:
+        self.focus = (0, 1)
         self.numeric_layout = NumericLayout()
 
-    def _get_at_pos(self, pos):
+    def _get_at_pos(self, pos: tuple[int, int]) -> tuple[urwid.Text, tuple[int, int]]:
         """Return a widget and the position passed."""
-        return urwid.Text("%d"%pos[1], layout=self.numeric_layout), pos
+        return urwid.Text(f"{pos[1]:d}", layout=self.numeric_layout), pos
 
-    def get_focus(self):
+    def get_focus(self) -> tuple[urwid.Text, tuple[int, int]]:
         return self._get_at_pos(self.focus)
 
-    def set_focus(self, focus):
+    def set_focus(self, focus) -> None:
         self.focus = focus
         self._modified()
 
-    def get_next(self, start_from):
-        a, b = start_from
-        focus = b, a+b
+    def get_next(self, position) -> tuple[urwid.Text, tuple[int, int]]:
+        a, b = position
+        focus = b, a + b
         return self._get_at_pos(focus)
 
-    def get_prev(self, start_from):
-        a, b = start_from
-        focus = b-a, a
+    def get_prev(self, position) -> tuple[urwid.Text, tuple[int, int]]:
+        a, b = position
+        focus = b - a, a
         return self._get_at_pos(focus)
 
-def main():
+
+def main() -> None:
     palette = [
-        ('body','black','dark cyan', 'standout'),
-        ('foot','light gray', 'black'),
-        ('key','light cyan', 'black', 'underline'),
-        ('title', 'white', 'black',),
-        ]
+        ("body", "black", "dark cyan", "standout"),
+        ("foot", "light gray", "black"),
+        ("key", "light cyan", "black", "underline"),
+        (
+            "title",
+            "white",
+            "black",
+        ),
+    ]
 
     footer_text = [
-        ('title', "Fibonacci Set Viewer"), "    ",
-        ('key', "UP"), ", ", ('key', "DOWN"), ", ",
-        ('key', "PAGE UP"), " and ", ('key', "PAGE DOWN"),
+        ("title", "Fibonacci Set Viewer"),
+        "    ",
+        ("key", "UP"),
+        ", ",
+        ("key", "DOWN"),
+        ", ",
+        ("key", "PAGE UP"),
+        " and ",
+        ("key", "PAGE DOWN"),
         " move view  ",
-        ('key', "Q"), " exits",
-        ]
+        ("key", "Q"),
+        " exits",
+    ]
 
-    def exit_on_q(input):
-        if input in ('q', 'Q'):
+    def exit_on_q(key: str | tuple[str, int, int, int]) -> None:
+        if key in {"q", "Q"}:
             raise urwid.ExitMainLoop()
 
     listbox = urwid.ListBox(FibonacciWalker())
-    footer = urwid.AttrMap(urwid.Text(footer_text), 'foot')
-    view = urwid.Frame(urwid.AttrWrap(listbox, 'body'), footer=footer)
+    footer = urwid.AttrMap(urwid.Text(footer_text), "foot")
+    view = urwid.Frame(urwid.AttrMap(listbox, "body"), footer=footer)
     loop = urwid.MainLoop(view, palette, unhandled_input=exit_on_q)
     loop.run()
 
@@ -93,23 +111,27 @@ class NumericLayout(urwid.TextLayout):
     """
     TextLayout class for bottom-right aligned numbers
     """
-    def layout( self, text, width, align, wrap ):
+
+    def layout(
+        self,
+        text: str | bytes,
+        width: int,
+        align: Literal["left", "center", "right"] | urwid.Align,
+        wrap: Literal["any", "space", "clip", "ellipsis"] | urwid.WrapMode,
+    ) -> list[list[tuple[int, int, int | bytes] | tuple[int, int | None]]]:
         """
         Return layout structure for right justified numbers.
         """
         lt = len(text)
-        r = lt % width # remaining segment not full width wide
+        r = lt % width  # remaining segment not full width wide
         if r:
-            linestarts = range( r, lt, width )
             return [
-                # right-align the remaining segment on 1st line
-                [(width-r,None),(r, 0, r)]
-                # fill the rest of the lines
-                ] + [[(width, x, x+width)] for x in linestarts]
-        else:
-            linestarts = range( 0, lt, width )
-            return [[(width, x, x+width)] for x in linestarts]
+                [(width - r, None), (r, 0, r)],  # right-align the remaining segment on 1st line
+                *([(width, x, x + width)] for x in range(r, lt, width)),  # fill the rest of the lines
+            ]
+
+        return [[(width, x, x + width)] for x in range(0, lt, width)]
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

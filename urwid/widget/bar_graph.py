@@ -5,9 +5,9 @@ import typing
 from urwid.canvas import CanvasCombine, CompositeCanvas, SolidCanvas
 from urwid.util import get_encoding_mode
 
-from .constants import Sizing
+from .constants import BAR_SYMBOLS, Sizing
 from .text import Text
-from .widget import Widget, WidgetMeta, nocache_widget_render, nocache_widget_render_instance
+from .widget import Widget, WidgetError, WidgetMeta, nocache_widget_render, nocache_widget_render_instance
 
 if typing.TYPE_CHECKING:
     from typing_extensions import Literal
@@ -23,6 +23,8 @@ class BarGraphMeta(WidgetMeta):
     """
 
     def __init__(cls, name, bases, d):
+        # pylint: disable=protected-access
+
         super().__init__(name, bases, d)
 
         if "get_data" in d:
@@ -37,10 +39,10 @@ def nocache_bargraph_get_data(self, get_data_fn):
     to be polled to get the latest data.
     """
     self.render = nocache_widget_render_instance(self)
-    self._get_data = get_data_fn
+    self._get_data = get_data_fn  # pylint: disable=protected-access
 
 
-class BarGraphError(Exception):
+class BarGraphError(WidgetError):
     pass
 
 
@@ -49,15 +51,15 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
 
     ignore_focus = True
 
-    eighths = " ▁▂▃▄▅▆▇"
+    eighths = BAR_SYMBOLS.VERTICAL[:8]  # Full height is done by style
     hlines = "_⎺⎻─⎼⎽"
 
-    def __init__(self, attlist, hatt=None, satt=None):
+    def __init__(self, attlist, hatt=None, satt=None) -> None:
         """
         Create a bar graph with the passed display characteristics.
         see set_segment_attributes for a description of the parameters.
         """
-
+        super().__init__()
         self.set_segment_attributes(attlist, hatt, satt)
         self.set_data([], 1, None)
         self.set_bar_width(None)
@@ -134,7 +136,7 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
                 raise BarGraphError(f"fg ({fg}) not > bg ({bg})")
         self.satt = satt
 
-    def set_data(self, bardata, top, hlines=None):
+    def set_data(self, bardata, top: float, hlines=None) -> None:
         """
         Store bar data, bargraph top and horizontal line positions.
 
@@ -195,7 +197,7 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
         If self.bar_width is None this implementation will stretch
         the bars across the available space specified by maxcol.
         """
-        (maxcol, maxrow) = size
+        (maxcol, _maxrow) = size
 
         if self.bar_width is not None:
             return [self.bar_width] * min(len(bardata), maxcol // self.bar_width)
@@ -227,7 +229,7 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
         Calculate display data.
         """
         (maxcol, maxrow) = size
-        bardata, top, hlines = self.get_data((maxcol, maxrow))
+        bardata, top, hlines = self.get_data((maxcol, maxrow))  # pylint: disable=no-member  # metaclass defined
         widths = self.calculate_bar_widths((maxcol, maxrow), bardata)
 
         if self.use_smoothed():
@@ -267,12 +269,7 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
             ]
 
         # reverse the hlines to match screen ordering
-        rhl = []
-        for h in hlines:
-            rh = float(top - h) * maxrow / top - shiftr
-            if rh < 0:
-                continue
-            rhl.append(rh)
+        rhl = [rh for h in hlines if (rh := float(top - h) * maxrow / top - shiftr) >= 0]
 
         # build a list of rows that will have hlines
         hrows = []
@@ -378,7 +375,7 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
                 row_combine_last(count, row)
                 y_count -= count  # noqa: PLW2901
                 r += count
-                r = r % 8
+                r %= 8
                 if not y_count:
                     continue
             if r != 0:
@@ -408,7 +405,7 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
                     if len(bar_type) == 3:
                         # vertical eighths
                         fg, bg, k = bar_type
-                        a = self.satt[(fg, bg)]
+                        a = self.satt[fg, bg]
                         t = self.eighths[k] * width
                     else:
                         # horizontal lines
@@ -428,7 +425,7 @@ class BarGraph(Widget, metaclass=BarGraphMeta):
         return canv
 
 
-def calculate_bargraph_display(bardata, top, bar_widths, maxrow: int):
+def calculate_bargraph_display(bardata, top: float, bar_widths: list[int], maxrow: int):
     """
     Calculate a rendering of the bar graph described by data, bar_widths
     and height.
@@ -490,8 +487,7 @@ def calculate_bargraph_display(bardata, top, bar_widths, maxrow: int):
 
             if s >= maxrow:
                 continue
-            if s < 0:
-                s = 0
+            s = max(s, 0)
             if s < tallest:
                 # add only properly-overlapped bars
                 tallest = s
@@ -507,7 +503,7 @@ def calculate_bargraph_display(bardata, top, bar_widths, maxrow: int):
 
     for r in rows:
         if r is None:
-            y_count = y_count + 1
+            y_count += 1
             continue
         if y_count:
             rowsets.append((y_count, last))
@@ -574,7 +570,7 @@ def calculate_bargraph_display(bardata, top, bar_widths, maxrow: int):
 class GraphVScale(Widget):
     _sizing = frozenset([Sizing.BOX])
 
-    def __init__(self, labels, top):
+    def __init__(self, labels, top: float) -> None:
         """
         GraphVScale( [(label1 position, label1 markup),...], top )
         label position -- 0 < position < top for the y position
@@ -584,9 +580,10 @@ class GraphVScale(Widget):
         This widget is a vertical scale for the BarGraph widget that
         can correspond to the BarGraph's horizontal lines
         """
+        super().__init__()
         self.set_scale(labels, top)
 
-    def set_scale(self, labels, top):
+    def set_scale(self, labels, top: float) -> None:
         """
         set_scale( [(label1 position, label1 markup),...], top )
         label position -- 0 < position < top for the y position
@@ -609,7 +606,11 @@ class GraphVScale(Widget):
         """
         return False
 
-    def render(self, size: tuple[int, int], focus: bool = False):
+    def render(
+        self,
+        size: tuple[int, int],
+        focus: bool = False,
+    ) -> SolidCanvas | CompositeCanvas:
         """
         Render GraphVScale.
         """
@@ -634,13 +635,13 @@ class GraphVScale(Widget):
         if not combinelist:
             return SolidCanvas(" ", size[0], size[1])
 
-        c = CanvasCombine(combinelist)
+        canvas = CanvasCombine(combinelist)
         if maxrow - rows:
-            c.pad_trim_top_bottom(0, maxrow - rows)
-        return c
+            canvas.pad_trim_top_bottom(0, maxrow - rows)
+        return canvas
 
 
-def scale_bar_values(bar, top, maxrow: int):
+def scale_bar_values(bar, top: float, maxrow: int) -> list[int]:
     """
     Return a list of bar values aliased to integer values of maxrow.
     """

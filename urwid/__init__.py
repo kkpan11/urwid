@@ -1,5 +1,3 @@
-#!/usr/bin/python
-#
 # Urwid __init__.py - all the stuff you're likely to care about
 #
 #    Copyright (C) 2004-2012  Ian Ward
@@ -22,6 +20,12 @@
 
 
 from __future__ import annotations
+
+import importlib
+import sys
+import types
+import typing
+import warnings
 
 from urwid.canvas import (
     BlankCanvas,
@@ -49,7 +53,6 @@ from urwid.command_map import (
     CommandMap,
     command_map,
 )
-
 from urwid.font import (
     Font,
     FontRegistry,
@@ -64,95 +67,35 @@ from urwid.font import (
     Thin6x6Font,
     get_all_fonts,
 )
-
-from urwid.listbox import ListBox, ListBoxError, ListWalker, ListWalkerError, SimpleFocusListWalker, SimpleListWalker
-from urwid.event_loop import EventLoop, AsyncioEventLoop, ExitMainLoop, MainLoop, SelectEventLoop
-from urwid.monitored_list import MonitoredFocusList, MonitoredList
-from urwid.signals import MetaSignals, Signals, connect_signal, disconnect_signal, emit_signal, register_signal
-from urwid.version import __version__, __version_tuple__
-from urwid.widget import (
-    ANY,
-    BOTTOM,
-    BOX,
-    CENTER,
-    CLIP,
-    ELLIPSIS,
-    FIXED,
-    FLOW,
-    GIVEN,
-    LEFT,
-    MIDDLE,
-    PACK,
-    RELATIVE,
-    RELATIVE_100,
-    RIGHT,
-    SPACE,
-    TOP,
-    WEIGHT,
-    Align,
-    Sizing,
-    VAlign,
-    WHSettings,
-    WrapMode,
-    BoxWidget,
-    Divider,
-    Edit,
-    EditError,
-    FixedWidget,
-    FlowWidget,
-    IntEdit,
-    SolidFill,
-    Text,
-    TextError,
-    Widget,
-    WidgetError,
-    WidgetMeta,
-    WidgetWrap,
-    WidgetWrapError,
-    delegate_to_widget_mixin,
-    fixed_size,
-    WidgetPlaceholder,
-    AttrMap,
-    AttrMapError,
-    AttrWrap,
-    BoxAdapter,
-    BoxAdapterError,
-    WidgetDisable,
-    Filler,
-    FillerError,
-    Padding,
-    PaddingError,
-    WidgetDecoration,
-    GridFlow,
-    GridFlowError,
-    Frame,
-    FrameError,
-    Overlay,
-    OverlayError,
-    Pile,
-    PileError,
-    Columns,
-    ColumnsError,
-    WidgetContainerMixin,
-    PopUpLauncher,
-    PopUpTarget,
-    Button,
-    CheckBox,
-    CheckBoxError,
-    RadioButton,
-    SelectableIcon,
-    BigText,
-    LineBox,
-    BarGraph,
-    BarGraphError,
-    BarGraphMeta,
-    GraphVScale,
-    scale_bar_values,
-    ProgressBar,
+from urwid.signals import (
+    MetaSignals,
+    Signals,
+    connect_signal,
+    disconnect_signal,
+    disconnect_signal_by_key,
+    emit_signal,
+    register_signal,
 )
+from urwid.str_util import calc_text_pos, calc_width, is_wide_char, move_next_char, move_prev_char, within_double_byte
+from urwid.text_layout import LayoutSegment, StandardTextLayout, TextLayout, default_layout
+from urwid.util import (
+    MetaSuper,
+    TagMarkupException,
+    apply_target_encoding,
+    calc_trim_text,
+    decompose_tagmarkup,
+    detected_encoding,
+    get_encoding_mode,
+    int_scale,
+    is_mouse_event,
+    set_encoding,
+    supports_unicode,
+)
+from urwid.version import version as __version__
+from urwid.version import version_tuple as __version_tuple__
 
-from urwid import raw_display
-from urwid.display_common import (
+from . import display, event_loop, widget
+from .display import (
     BLACK,
     BROWN,
     DARK_BLUE,
@@ -177,55 +120,224 @@ from urwid.display_common import (
     RealTerminal,
     ScreenError,
 )
-from urwid.text_layout import LayoutSegment, StandardTextLayout, TextLayout, default_layout
-from urwid.treetools import ParentNode, TreeListBox, TreeNode, TreeWalker, TreeWidget, TreeWidgetError
-from urwid.util import (
-    MetaSuper,
-    TagMarkupException,
-    apply_target_encoding,
-    calc_text_pos,
-    calc_trim_text,
-    calc_width,
-    decompose_tagmarkup,
-    detected_encoding,
-    get_encoding_mode,
-    int_scale,
-    is_mouse_event,
-    is_wide_char,
-    move_next_char,
-    move_prev_char,
-    set_encoding,
-    supports_unicode,
-    within_double_byte,
+from .event_loop import AsyncioEventLoop, EventLoop, ExitMainLoop, MainLoop, SelectEventLoop
+from .widget import (
+    ANY,
+    BOTTOM,
+    BOX,
+    CENTER,
+    CLIP,
+    ELLIPSIS,
+    FIXED,
+    FLOW,
+    GIVEN,
+    LEFT,
+    MIDDLE,
+    PACK,
+    RELATIVE,
+    RELATIVE_100,
+    RIGHT,
+    SPACE,
+    TOP,
+    WEIGHT,
+    Align,
+    AttrMap,
+    AttrMapError,
+    AttrWrap,
+    BarGraph,
+    BarGraphError,
+    BarGraphMeta,
+    BigText,
+    BoxAdapter,
+    BoxAdapterError,
+    Button,
+    CheckBox,
+    CheckBoxError,
+    Columns,
+    ColumnsError,
+    Divider,
+    Edit,
+    EditError,
+    Filler,
+    FillerError,
+    Frame,
+    FrameError,
+    GraphVScale,
+    GridFlow,
+    GridFlowError,
+    IntEdit,
+    LineBox,
+    ListBox,
+    ListBoxError,
+    ListWalker,
+    ListWalkerError,
+    MonitoredFocusList,
+    MonitoredList,
+    Overlay,
+    OverlayError,
+    Padding,
+    PaddingError,
+    ParentNode,
+    Pile,
+    PileError,
+    PopUpLauncher,
+    PopUpTarget,
+    ProgressBar,
+    RadioButton,
+    Scrollable,
+    ScrollBar,
+    SelectableIcon,
+    SimpleFocusListWalker,
+    SimpleListWalker,
+    Sizing,
+    SolidFill,
+    Text,
+    TextError,
+    TreeListBox,
+    TreeNode,
+    TreeWalker,
+    TreeWidget,
+    TreeWidgetError,
+    VAlign,
+    WHSettings,
+    Widget,
+    WidgetContainerMixin,
+    WidgetDecoration,
+    WidgetDisable,
+    WidgetError,
+    WidgetMeta,
+    WidgetPlaceholder,
+    WidgetWrap,
+    WidgetWrapError,
+    WrapMode,
+    delegate_to_widget_mixin,
+    fixed_size,
+    scale_bar_values,
 )
-from urwid.vterm import TermCanvas, TermCharset, Terminal, TermModes, TermScroller
 
 # Optional event loops with external dependencies
 
 try:
-    from urwid.event_loop import TornadoEventLoop
+    from .event_loop import TornadoEventLoop
 except ImportError:
     pass
 
 try:
-    from urwid.event_loop import GLibEventLoop
+    from .event_loop import GLibEventLoop
 except ImportError:
     pass
 
 try:
-    from urwid.event_loop import TwistedEventLoop
+    from .event_loop import TwistedEventLoop
 except ImportError:
     pass
 
 try:
-    from urwid.event_loop import TrioEventLoop
+    from .event_loop import TrioEventLoop
 except ImportError:
     pass
 
-try:
-    from urwid.event_loop import ZMQEventLoop
-except ImportError:
-    pass
+# OS Specific
+if sys.platform != "win32":
+    from .vterm import TermCanvas, TermCharset, Terminal, TermModes
+
+    # ZMQEventLoop cause interpreter crash on windows
+    try:
+        from .event_loop import ZMQEventLoop
+    except ImportError:
+        pass
 
 # Backward compatibility
 VERSION = __version_tuple__
+
+
+# Moved modules handling
+__locals: dict[str, typing.Any] = locals()  # use mutable access for pure lazy loading
+
+# Backward compatible lazy load with deprecation warnings
+_moved_warn: dict[str, str] = {
+    "lcd_display": "urwid.display.lcd",
+    "html_fragment": "urwid.display.html_fragment",
+    "web_display": "urwid.display.web",
+    "monitored_list": "urwid.widget.monitored_list",
+    "listbox": "urwid.widget.listbox",
+    "treetools": "urwid.widget.treetools",
+}
+# Backward compatible lazy load without any warnings
+# Before DeprecationWarning need to start PendingDeprecationWarning process.
+_moved_no_warn: dict[str, str] = {
+    "display_common": "urwid.display.common",
+    "raw_display": "urwid.display.raw",
+    "curses_display": "urwid.display.curses",
+    "escape": "urwid.display.escape",
+}
+
+
+class _MovedModule(types.ModuleType):
+    """Special class to handle moved modules.
+
+    PEP-0562 handles moved modules attributes, but unfortunately not handle nested modules access
+    like "from xxx.yyy import zzz"
+    """
+
+    __slots__ = ("_moved_from", "_moved_to")
+
+    def __init__(self, moved_from: str, moved_to: str) -> None:
+        super().__init__(moved_from.join(".")[-1])
+        self._moved_from = moved_from
+        self._moved_to = moved_to
+
+    def __getattr__(self, name: str) -> typing.Any:
+        real_module = importlib.import_module(self._moved_to)
+        sys.modules[self._moved_from] = real_module
+        return getattr(real_module, name)
+
+
+class _MovedModuleWarn(_MovedModule):
+    """Special class to handle moved modules.
+
+    Produce DeprecationWarning messages for imports.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name: str) -> typing.Any:
+        warnings.warn(
+            f"{self._moved_from} is moved to {self._moved_to}",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return super().__getattr__(name)
+
+
+for _name, _module in _moved_no_warn.items():
+    _module_path = f"{__name__}.{_name}"
+    sys.modules[_module_path] = _MovedModule(_module_path, _module)
+
+for _name, _module in _moved_warn.items():
+    _module_path = f"{__name__}.{_name}"
+    sys.modules[_module_path] = _MovedModuleWarn(_module_path, _module)
+
+
+def __getattr__(name: str) -> typing.Any:
+    """Get attributes lazy.
+
+    :return: attribute by name
+    :raises AttributeError: attribute is not defined for lazy load
+    """
+    if name in _moved_no_warn:
+        mod = importlib.import_module(_moved_no_warn[name])
+        __locals[name] = mod
+        return mod
+
+    if name in _moved_warn:
+        warnings.warn(
+            f"{name} is moved to {_moved_warn[name]}",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        mod = importlib.import_module(_moved_warn[name])
+        __locals[name] = mod
+        return mod
+    raise AttributeError(f"{name} not found in {__package__}")

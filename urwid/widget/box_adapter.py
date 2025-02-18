@@ -6,24 +6,23 @@ import warnings
 from urwid.canvas import CompositeCanvas
 
 from .constants import Sizing
-from .widget_decoration import WidgetDecoration
+from .widget_decoration import WidgetDecoration, WidgetError
 
-if typing.TYPE_CHECKING:
-    from .widget import Widget
+WrappedWidget = typing.TypeVar("WrappedWidget")
 
 
-class BoxAdapterError(Exception):
+class BoxAdapterError(WidgetError):
     pass
 
 
-class BoxAdapter(WidgetDecoration):
+class BoxAdapter(WidgetDecoration[WrappedWidget]):
     """
     Adapter for using a box widget where a flow widget would usually go
     """
 
     no_cache: typing.ClassVar[list[str]] = ["rows"]
 
-    def __init__(self, box_widget, height):
+    def __init__(self, box_widget: WrappedWidget, height: int) -> None:
         """
         Create a flow widget that contains a box widget
 
@@ -42,12 +41,12 @@ class BoxAdapter(WidgetDecoration):
 
         self.height = height
 
-    def _repr_attrs(self):
-        return dict(super()._repr_attrs(), height=self.height)
+    def _repr_attrs(self) -> dict[str, typing.Any]:
+        return {**super()._repr_attrs(), "height": self.height}
 
     # originally stored as box_widget, keep for compatibility
     @property
-    def box_widget(self) -> Widget:
+    def box_widget(self) -> WrappedWidget:
         warnings.warn(
             "original stored as original_widget, keep for compatibility",
             PendingDeprecationWarning,
@@ -56,7 +55,7 @@ class BoxAdapter(WidgetDecoration):
         return self.original_widget
 
     @box_widget.setter
-    def box_widget(self, widget: Widget):
+    def box_widget(self, widget: WrappedWidget) -> None:
         warnings.warn(
             "original stored as original_widget, keep for compatibility",
             PendingDeprecationWarning,
@@ -64,8 +63,8 @@ class BoxAdapter(WidgetDecoration):
         )
         self.original_widget = widget
 
-    def sizing(self):
-        return {Sizing.FLOW}
+    def sizing(self) -> frozenset[Sizing]:
+        return frozenset((Sizing.FLOW,))
 
     def rows(self, size: tuple[int], focus: bool = False) -> int:
         """
@@ -91,7 +90,11 @@ class BoxAdapter(WidgetDecoration):
             return None
         return self._original_widget.get_pref_col((maxcol, self.height))
 
-    def keypress(self, size: tuple[int], key: str) -> str | None:
+    def keypress(
+        self,
+        size: tuple[int],  # type: ignore[override]
+        key: str,
+    ) -> str | None:
         (maxcol,) = size
         return self._original_widget.keypress((maxcol, self.height), key)
 
@@ -103,19 +106,23 @@ class BoxAdapter(WidgetDecoration):
 
     def mouse_event(
         self,
-        size: tuple[int],
-        event,
+        size: tuple[int],  # type: ignore[override]
+        event: str,
         button: int,
         col: int,
         row: int,
         focus: bool,
-    ) -> bool:
+    ) -> bool | None:
         (maxcol,) = size
         if not hasattr(self._original_widget, "mouse_event"):
             return False
         return self._original_widget.mouse_event((maxcol, self.height), event, button, col, row, focus)
 
-    def render(self, size: tuple[int], focus: bool = False) -> CompositeCanvas:
+    def render(
+        self,
+        size: tuple[int],  # type: ignore[override]
+        focus: bool = False,
+    ) -> CompositeCanvas:
         (maxcol,) = size
         canv = CompositeCanvas(self._original_widget.render((maxcol, self.height), focus))
         return canv

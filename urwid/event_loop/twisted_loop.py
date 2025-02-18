@@ -26,6 +26,8 @@ Twisted library is required.
 
 from __future__ import annotations
 
+import functools
+import logging
 import sys
 import typing
 
@@ -36,8 +38,9 @@ from .abstract_loop import EventLoop, ExitMainLoop
 
 if typing.TYPE_CHECKING:
     from collections.abc import Callable
+    from concurrent.futures import Executor, Future
 
-    from twisted.internet.interfaces import IReactorFDSet
+    from twisted.internet.base import DelayedCall, ReactorBase
     from typing_extensions import ParamSpec
 
     _Spec = ParamSpec("_Spec")
@@ -47,16 +50,25 @@ __all__ = ("TwistedEventLoop",)
 
 
 class _TwistedInputDescriptor(FileDescriptor):
-    def __init__(self, reactor: IReactorFDSet, fd: int, cb: Callable[[], typing.Any]) -> None:
+    def __init__(self, reactor: ReactorBase, fd: int, cb: Callable[[], typing.Any]) -> None:
         self._fileno = fd
         self.cb = cb
-        super().__init__(reactor)
+        super().__init__(reactor)  # ReactorBase implement full API as required in interfaces
 
     def fileno(self) -> int:
         return self._fileno
 
     def doRead(self):
         return self.cb()
+
+    def getHost(self):
+        raise NotImplementedError("No network operation expected")
+
+    def getPeer(self):
+        raise NotImplementedError("No network operation expected")
+
+    def writeSomeData(self, data: bytes) -> None:
+        raise NotImplementedError("Reduced functionality: read-only")
 
 
 class TwistedEventLoop(EventLoop):
@@ -66,7 +78,7 @@ class TwistedEventLoop(EventLoop):
 
     _idle_emulation_delay = 1.0 / 256  # a short time (in seconds)
 
-    def __init__(self, reactor=None, manage_reactor: bool = True) -> None:
+    def __init__(self, reactor: ReactorBase | None = None, manage_reactor: bool = True) -> None:
         """
         :param reactor: reactor to use
         :type reactor: :class:`twisted.internet.reactor`.
@@ -86,11 +98,13 @@ class TwistedEventLoop(EventLoop):
 
         .. _Twisted: https://twisted.org/
         """
+        super().__init__()
+        self.logger = logging.getLogger(__name__).getChild(self.__class__.__name__)
         if reactor is None:
             import twisted.internet.reactor
 
             reactor = twisted.internet.reactor
-        self.reactor = reactor
+        self.reactor: ReactorBase = reactor
         self._watch_files: dict[int, _TwistedInputDescriptor] = {}
         self._idle_handle: int = 0
         self._twisted_idle_enabled = False
@@ -99,7 +113,21 @@ class TwistedEventLoop(EventLoop):
         self.manage_reactor = manage_reactor
         self._enable_twisted_idle()
 
-    def alarm(self, seconds: float, callback: Callable[[], typing.Any]):
+    def run_in_executor(
+        self,
+        executor: Executor,
+        func: Callable[..., _T],
+        *args: object,
+        **kwargs: object,
+    ) -> Future[_T]:
+        raise NotImplementedError(
+            "Twisted implement it's own ThreadPool executor. Please use native API for call:\n"
+            "'threads.deferToThread(Callable[..., Any], *args, **kwargs)'\n"
+            "And use 'addCallback' api for callbacks:\n"
+            "'threads.deferToThread(Callable[..., T], *args, **kwargs).addCallback(Callable[[T], None])'"
+        )
+
+    def alarm(self, seconds: float, callback: Callable[[], typing.Any]) -> DelayedCall:
         """
         Call callback() a given time from now.  No parameters are
         passed to callback.
@@ -112,7 +140,7 @@ class TwistedEventLoop(EventLoop):
         handle = self.reactor.callLater(seconds, self.handle_exit(callback))
         return handle
 
-    def remove_alarm(self, handle) -> bool:
+    def remove_alarm(self, handle: DelayedCall) -> bool:
         """
         Remove an alarm.
 
@@ -186,7 +214,7 @@ class TwistedEventLoop(EventLoop):
             callback()
         self._twisted_idle_enabled = False
 
-    def remove_enter_idle(self, handle) -> bool:
+    def remove_enter_idle(self, handle: int) -> bool:
         """
         Remove an idle callback.
 
@@ -222,6 +250,7 @@ class TwistedEventLoop(EventLoop):
         *f* -- function to be wrapped
         """
 
+        @functools.wraps(f)
         def wrapper(*args: _Spec.args, **kwargs: _Spec.kwargs) -> _T | None:
             rval = None
             try:
